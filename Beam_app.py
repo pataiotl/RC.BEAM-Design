@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 import math
 import tempfile
 import os
@@ -202,58 +201,6 @@ def calculate_development_length(db, fy, fc, is_top_bar, cover_clear, clear_spac
     }
 
 
-def draw_cross_section(b, h, cover_clear, bar_v, top_rg: RebarGroup, bot_rg: RebarGroup, title, stirrup_label=""):
-    fig, ax = plt.subplots(figsize=(5, 5), dpi=120)
-    ax.add_patch(patches.Rectangle((0, 0), b, h, linewidth=1.5,
-                                   edgecolor='black', facecolor='lightgray', alpha=0.3))
-    ax.add_patch(patches.Rectangle((cover_clear, cover_clear),
-                                   b - 2 * cover_clear, h - 2 * cover_clear,
-                                   linewidth=1.5, edgecolor='blue', facecolor='none'))
-    if stirrup_label:
-        ax.annotate(stirrup_label, xy=(cover_clear, h / 2), xytext=(-20, h / 2),
-                    fontsize=8, fontweight='bold', color='blue', ha='right', va='center',
-                    arrowprops=dict(arrowstyle="->", color='blue', lw=1.2))
-
-    def plot_bars(rg, is_top, color):
-        for idx, layer in enumerate(rg.layers):
-            n_bars, dia, y_dist = layer
-            if n_bars == 0:
-                continue
-            y_actual = (h - y_dist) if is_top else y_dist
-            rightmost_x = b / 2
-            if n_bars == 1:
-                ax.add_patch(patches.Circle((b / 2, y_actual), dia / 2,
-                                            facecolor=color, edgecolor='black', zorder=3))
-                rightmost_x = b / 2 + dia / 2
-            else:
-                x_start = cover_clear + bar_v + dia / 2
-                spacing = (b - 2 * (cover_clear + bar_v) - dia) / (n_bars - 1)
-                for i in range(n_bars):
-                    bar_x = x_start + i * spacing
-                    ax.add_patch(patches.Circle((bar_x, y_actual), dia / 2,
-                                                facecolor=color, edgecolor='black', zorder=3))
-                    if i == n_bars - 1:
-                        rightmost_x = bar_x + dia / 2
-            label = f"{int(n_bars)}-DB{int(dia)}"
-            y_offset = (20 + idx * 15) if is_top else (-20 - idx * 15)
-            ax.annotate(label, xy=(rightmost_x, y_actual),
-                        xytext=(b + 25, y_actual + y_offset),
-                        fontsize=8, fontweight='bold', color=color,
-                        ha='left', va='center',
-                        arrowprops=dict(arrowstyle="->", color=color, lw=1.2))
-
-    plot_bars(top_rg, True, 'crimson')
-    plot_bars(bot_rg, False, 'mediumseagreen')
-    ax.text(b / 2, -25, f"b = {int(b)}", ha='center', fontsize=8)
-    ax.text(-25, h / 2, f"h = {int(h)}", va='center', rotation=90, fontsize=8)
-    ax.set_xlim(-100, b + 120)
-    ax.set_ylim(-50, h + 50)
-    ax.set_aspect('equal')
-    ax.axis('off')
-    ax.set_title(title, fontweight="bold", fontsize=10)
-    return fig
-
-
 def create_pdf_report(b, h, fc, fy, fyt, frame_name, env_img_path, zone_data, input_mode):
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.add_page()
@@ -299,16 +246,6 @@ def create_pdf_report(b, h, fc, fy, fyt, frame_name, env_img_path, zone_data, in
         pdf.cell(0, 5, txt2, ln=True)
         pdf.ln(1)
 
-    pdf.ln(2)
-    pdf.set_font("Arial", 'B', 11)
-    pdf.cell(0, 6, "3. Cross-Section Detailing", ln=True)
-    y_cs = pdf.get_y()
-    x_positions = {'Left': 15, 'Mid': 75, 'Right': 135}
-    for zone in ["Left", "Mid", "Right"]:
-        data = zone_data.get(zone)
-        if data and os.path.exists(data.get('img_path', '')):
-            pdf.image(data['img_path'], x=x_positions[zone], y=y_cs, w=60)
-
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         pdf.output(tmp_pdf.name)
         with open(tmp_pdf.name, "rb") as f:
@@ -316,9 +253,6 @@ def create_pdf_report(b, h, fc, fy, fyt, frame_name, env_img_path, zone_data, in
     try:
         if env_img_path and os.path.exists(env_img_path):
             os.remove(env_img_path)
-        for d in zone_data.values():
-            if d and os.path.exists(d.get('img_path', '')):
-                os.remove(d['img_path'])
         os.remove(tmp_pdf.name)
     except Exception:
         pass
@@ -406,20 +340,20 @@ if use_sap:
                 icon="ℹ️"
             )
 
-            # --- Envelope plot ---
+            # --- Envelope plot (Reduced Size) ---
             df_env = df.groupby('Station').agg(
                 M3_Max=('M3', 'max'), M3_Min=('M3', 'min'),
                 V2_Max=('V2', 'max'), V2_Min=('V2', 'min')
             ).reset_index()
 
-            fig_env, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 4), sharex=True, dpi=110)
+            fig_env, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 3), sharex=True, dpi=100)
             ax1.plot(df_env['Station'], df_env['M3_Max'], color='blue', linewidth=1.5, label='+M3')
             ax1.plot(df_env['Station'], df_env['M3_Min'], color='red',  linewidth=1.5, label='−M3')
             ax1.fill_between(df_env['Station'], df_env['M3_Min'], df_env['M3_Max'], color='gray', alpha=0.15)
             ax1.axhline(0, color='black', linewidth=0.8)
             ax1.set_ylabel("M (kNm)", fontsize=9)
             ax1.invert_yaxis()
-            ax1.legend(fontsize=8)
+            ax1.legend(fontsize=8, loc="lower right")
             ax1.grid(True, linestyle='--', alpha=0.5)
             ax1.set_title(f"Force Envelopes — Frame {selected_frame}", fontweight='bold', fontsize=10)
 
@@ -430,10 +364,12 @@ if use_sap:
             ax2.axhline(0, color='black', linewidth=0.8)
             ax2.set_xlabel("Station (m)", fontsize=9)
             ax2.set_ylabel("V (kN)", fontsize=9)
-            ax2.legend(fontsize=8)
+            ax2.legend(fontsize=8, loc="upper right")
             ax2.grid(True, linestyle='--', alpha=0.5)
             plt.tight_layout()
-            st.pyplot(fig_env, use_container_width=True)
+            
+            # Use False so the diagram stays compact instead of stretching
+            st.pyplot(fig_env, use_container_width=False) 
 
             # --- Critical demands metrics ---
             idx_pos_M = df['M3'].idxmax()
@@ -468,7 +404,6 @@ else:
         "Moments are absolute values — sign convention is handled by zone."
     )
 
-    # Optional beam length (for context / h_min note only)
     beam_length = st.number_input("Beam span L (m) — used for deflection h_min note only",
                                   value=6.0, step=0.5, min_value=1.0)
     h_min_req = (beam_length * 1000) / 18.5
@@ -520,7 +455,6 @@ else:
                                                 min_value=0.0, key="t_right",
                                                 help="Factored torsion at right zone")
 
-    # Live demand summary
     st.markdown("---")
     st.markdown("**Demand summary (entered values):**")
     s1, s2, s3 = st.columns(3)
@@ -671,7 +605,6 @@ if st.button("🚀 Run Full 3-Zone Detailing Design", type="primary", use_contai
 
             # ---- SHEAR ----
             if use_sap and df is not None and beam_length > 0 and zone in ["Left", "Right"]:
-                # SAP2000: extract Vu at distance d from support
                 d_m = d / 1000.0
                 valid = df[(df['Station'] >= d_m) & (df['Station'] <= (beam_length - d_m))]
                 if not valid.empty:
@@ -686,7 +619,6 @@ if st.button("🚀 Run Full 3-Zone Detailing Design", type="primary", use_contai
                     Vu_design   = max_V2_raw
                     combo_label = combo_V2
             else:
-                # Manual input: use zone force directly
                 Vu_design   = forces[zone]['V']
                 combo_label = "Manual input"
 
@@ -724,16 +656,6 @@ if st.button("🚀 Run Full 3-Zone Detailing Design", type="primary", use_contai
             else:
                 st.write(f"- Bottom lap splice: **{dev_bot['lap']}** mm")
 
-            # ---- CROSS-SECTION DRAWING ----
-            stirrup_text = (f"{n_legs}-DB{bar_v}@{res_shear['final_s']}"
-                            if res_shear['final_s'] > 0 else "FAILS")
-            fig_cs = draw_cross_section(b, h, cover_clear, bar_v, top_rg, bot_rg,
-                                        zone, stirrup_label=stirrup_text)
-            st.pyplot(fig_cs, use_container_width=False)
-            tmp_cs = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-            fig_cs.savefig(tmp_cs.name, bbox_inches='tight', dpi=150)
-            plt.close(fig_cs)
-
             # ---- EXPANDER: full calc steps ----
             with st.expander("🧮 Calculation steps"):
                 st.markdown(f"""
@@ -756,8 +678,7 @@ if st.button("🚀 Run Full 3-Zone Detailing Design", type="primary", use_contai
                 'Vu': round(Vu_design, 1), 'DC_shear': DC_shear,
                 'stirrups': (f"{n_legs}-DB{bar_v} @ {res_shear['final_s']} mm (D/C: {DC_shear})"
                              if res_shear['final_s'] > 0 else "FAILS"),
-                'dev_top': dev_top['ldh'], 'dev_top_lap': dev_top['lap'], 'dev_bot': dev_bot['lap'],
-                'img_path': tmp_cs.name,
+                'dev_top': dev_top['ldh'], 'dev_top_lap': dev_top['lap'], 'dev_bot': dev_bot['lap']
             }
 
     # ---- PDF EXPORT ----
