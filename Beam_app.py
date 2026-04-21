@@ -340,35 +340,37 @@ if use_sap:
                 icon="ℹ️"
             )
 
-            # --- Envelope plot (Reduced Size) ---
+            # --- Envelope plot (Ultra Compact) ---
             df_env = df.groupby('Station').agg(
                 M3_Max=('M3', 'max'), M3_Min=('M3', 'min'),
                 V2_Max=('V2', 'max'), V2_Min=('V2', 'min')
             ).reset_index()
 
-            fig_env, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 3), sharex=True, dpi=100)
-            ax1.plot(df_env['Station'], df_env['M3_Max'], color='blue', linewidth=1.5, label='+M3')
-            ax1.plot(df_env['Station'], df_env['M3_Min'], color='red',  linewidth=1.5, label='−M3')
+            fig_env, (ax1, ax2) = plt.subplots(2, 1, figsize=(4, 2.5), sharex=True, dpi=90)
+            
+            ax1.plot(df_env['Station'], df_env['M3_Max'], color='blue', linewidth=1, label='+M')
+            ax1.plot(df_env['Station'], df_env['M3_Min'], color='red',  linewidth=1, label='−M')
             ax1.fill_between(df_env['Station'], df_env['M3_Min'], df_env['M3_Max'], color='gray', alpha=0.15)
-            ax1.axhline(0, color='black', linewidth=0.8)
-            ax1.set_ylabel("M (kNm)", fontsize=9)
+            ax1.axhline(0, color='black', linewidth=0.5)
+            ax1.set_ylabel("M", fontsize=7)
             ax1.invert_yaxis()
-            ax1.legend(fontsize=8, loc="lower right")
-            ax1.grid(True, linestyle='--', alpha=0.5)
-            ax1.set_title(f"Force Envelopes — Frame {selected_frame}", fontweight='bold', fontsize=10)
+            ax1.legend(fontsize=6, loc="lower right")
+            ax1.grid(True, linestyle='--', alpha=0.4, linewidth=0.5)
+            ax1.set_title(f"Frame {selected_frame}", fontweight='bold', fontsize=8)
+            ax1.tick_params(axis='both', which='major', labelsize=6)
 
-            ax2.plot(df_env['Station'], df_env['V2_Max'], color='green',     linewidth=1.5, label='+V2')
-            ax2.plot(df_env['Station'], df_env['V2_Min'], color='darkorange', linewidth=1.5, label='−V2')
-            ax2.fill_between(df_env['Station'], df_env['V2_Min'], df_env['V2_Max'],
-                             color='lightgreen', alpha=0.2)
-            ax2.axhline(0, color='black', linewidth=0.8)
-            ax2.set_xlabel("Station (m)", fontsize=9)
-            ax2.set_ylabel("V (kN)", fontsize=9)
-            ax2.legend(fontsize=8, loc="upper right")
-            ax2.grid(True, linestyle='--', alpha=0.5)
+            ax2.plot(df_env['Station'], df_env['V2_Max'], color='green',     linewidth=1, label='+V')
+            ax2.plot(df_env['Station'], df_env['V2_Min'], color='darkorange', linewidth=1, label='−V')
+            ax2.fill_between(df_env['Station'], df_env['V2_Min'], df_env['V2_Max'], color='lightgreen', alpha=0.2)
+            ax2.axhline(0, color='black', linewidth=0.5)
+            ax2.set_xlabel("Station (m)", fontsize=7)
+            ax2.set_ylabel("V", fontsize=7)
+            ax2.legend(fontsize=6, loc="upper right")
+            ax2.grid(True, linestyle='--', alpha=0.4, linewidth=0.5)
+            ax2.tick_params(axis='both', which='major', labelsize=6)
+            
             plt.tight_layout()
             
-            # Use False so the diagram stays compact instead of stretching
             st.pyplot(fig_env, use_container_width=False) 
 
             # --- Critical demands metrics ---
