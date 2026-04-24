@@ -436,20 +436,24 @@ def calculate_skin_reinforcement(h, d, skin_bar_dia, skin_bar_qty, skin_layers):
     required = h > 900
     s_limit = min(d / 6, 300) if d > 0 else 300
     zone_height = h / 2
+    bar_area = math.pi * skin_bar_dia**2 / 4
     provided_layers = max(1, int(skin_layers))
-    spacing = zone_height / (provided_layers - 1) if provided_layers > 1 else zone_height
+    bars_per_layer = max(0, int(skin_bar_qty))
+    spacing = 250 if provided_layers > 1 else zone_height
     spacing_ok = (not required) or spacing <= s_limit
-    bars_per_side = max(0, int(skin_bar_qty)) * provided_layers
-    area_per_side = bars_per_side * math.pi * skin_bar_dia**2 / 4
+    total_bars = bars_per_layer * provided_layers
+    area_total = total_bars * bar_area
+    area_per_side = area_total / 2
     return {
         "required": required,
         "s_limit": round(s_limit, 1),
-        "bars_per_side": bars_per_side,
-        "bars_per_layer": max(0, int(skin_bar_qty)),
+        "bars_per_side": total_bars / 2,
+        "bars_per_layer": bars_per_layer,
         "layers": provided_layers,
         "spacing": round(spacing, 1),
         "spacing_ok": spacing_ok,
         "area_per_side": round(area_per_side, 1),
+        "area_total": round(area_total, 1),
         "zone_height": round(zone_height, 1),
     }
 
@@ -510,17 +514,17 @@ def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone, s
     for x, y in [(corner_offset, corner_offset), (b - corner_offset, corner_offset), (corner_offset, h - corner_offset), (b - corner_offset, h - corner_offset)]:
         ax.add_patch(patches.Circle((x, y), 5, facecolor="#c084fc", edgecolor="#5b21b6", lw=0.5))
 
-    if skin and skin["bars_per_side"] > 0:
-        tension_top = zone in ["Left", "Right"]
-        y_start = cover + tie_dia + skin_bar_dia / 2 if tension_top else h / 2
-        y_end = h / 2 if tension_top else h - cover - tie_dia - skin_bar_dia / 2
+    if skin and skin["bars_per_layer"] > 0:
         if skin["layers"] == 1:
-            y_vals = [(y_start + y_end) / 2]
+            y_vals = [h / 2]
         else:
-            y_vals = [y_start + i * (y_end - y_start) / (skin["layers"] - 1) for i in range(skin["layers"])]
+            total_height = 250 * (skin["layers"] - 1)
+            y_top = h / 2 - total_height / 2
+            y_vals = [y_top + i * 250 for i in range(skin["layers"])]
         left_base = cover + tie_dia + skin_bar_dia / 2
         right_base = b - cover - tie_dia - skin_bar_dia / 2
-        x_offsets = [(i - (skin["bars_per_layer"] - 1) / 2) * (skin_bar_dia * 0.75) for i in range(skin["bars_per_layer"])]
+        bars_each_side = max(1, math.ceil(skin["bars_per_layer"] / 2))
+        x_offsets = [(i - (bars_each_side - 1) / 2) * (skin_bar_dia * 0.75) for i in range(bars_each_side)]
         for y in y_vals:
             for offset in x_offsets:
                 for base, sign in [(left_base, 1), (right_base, -1)]:
@@ -720,11 +724,11 @@ with col_prop:
     skin_bar_options = {"DB10": 10, "DB12": 12, "DB16": 16, "DB20": 20}
     skin_c1, skin_c2, skin_c3 = st.columns(3)
     skin_bar_qty = skin_c1.number_input(
-        "Qty/layer each side",
+        "Skin bars/layer",
         min_value=0,
         value=2,
         step=1,
-        help="Example: 2 with DB12 means 2-DB12 at each skin-bar layer on each side face.",
+        help="Example: 2 with DB12 means 2-DB12 total per layer: one bar on each side face.",
     )
     skin_bar_name = skin_c2.selectbox(
         "Skin bar size",
@@ -853,11 +857,21 @@ if st.session_state.get("design_results_visible", False):
             check_row("Transverse spacing", res_shear["final_s"] > 0, f"s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm")
             check_row("Torsion threshold", not res_shear["needs_torsion"], f"Tu = {forces[zone]['T']:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"])
             skin_detail = (
-                f"{skin['layers']} layers of {skin['bars_per_layer']}-{skin_bar_name} each side; h = {h:.0f} mm <= 900 mm, not required"
+                f"{skin['layers']} layer(s) of {skin['bars_per_layer']}-{skin_bar_name}; h = {h:.0f} mm <= 900 mm, not required"
                 if not skin["required"]
-                else f"{skin['layers']} layers of {skin['bars_per_layer']}-{skin_bar_name} each side; s = {skin['spacing']} <= {skin['s_limit']} mm"
+                else f"{skin['layers']} layer(s) of {skin['bars_per_layer']}-{skin_bar_name}; s = {skin['spacing']} <= {skin['s_limit']} mm"
             )
             check_row("ACI side-face skin bars", skin["spacing_ok"], skin_detail)
+            torsion_long_detail = (
+                f"Tu <= phiTth; longitudinal torsion steel not required"
+                if not res_shear["needs_torsion"]
+                else f"skin Al = {skin['area_total']} mm2 vs Al req = {res_shear['Al_req']} mm2"
+            )
+            check_row(
+                "Skin bars for torsion Al",
+                (not res_shear["needs_torsion"]) or skin["area_total"] >= res_shear["Al_req"],
+                torsion_long_detail,
+            )
 
             if st.toggle(f"Show calculation summary - {zone}", value=False, key=f"calc_summary_{zone}"):
                 st.dataframe(
@@ -871,6 +885,7 @@ if st.session_state.get("design_results_visible", False):
                             ("Aoh / ph", f"{res_shear['Aoh']:.0f} mm2 / {res_shear['ph']:.0f} mm", "Torsion cage geometry"),
                             ("Al torsion", f"{res_shear['Al_req']} mm2", "Required if torsion governs"),
                             ("Skin bars", skin_detail, "ACI 318 side-face longitudinal reinforcement for h > 900 mm"),
+                            ("Skin Al for torsion", f"{skin['area_total']} mm2", "Counted as longitudinal torsion steel only if enclosed by closed stirrups and developed"),
                             ("Top ldh / lap", f"{dev_top['ldh']} / {dev_top['lap']} mm", "Development lengths"),
                             ("Bottom lap", f"{dev_bot['lap']} mm", "Development length"),
                         ],
