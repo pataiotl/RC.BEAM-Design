@@ -20,7 +20,7 @@ html, body, [class*="css"] { font-size: 13px; }
 h1 { font-size: 1.35rem !important; font-weight: 700 !important; letter-spacing: -0.5px; }
 h2 { font-size: 1.05rem !important; font-weight: 600 !important; }
 h3 { font-size: 0.95rem !important; font-weight: 600 !important; }
-[data-testid="stSidebar"] { min-width: 270px !important; max-width: 300px !important; }
+[data-testid="stSidebar"] { min-width: 270px !important; max-width: 320px !important; }
 [data-testid="stSidebar"] .block-container { padding: 0.75rem 0.75rem 1rem !important; }
 [data-testid="stSidebar"] label { font-size: 11px !important; opacity: 0.8 !important; font-weight: 500; }
 [data-testid="stSidebar"] .stNumberInput input, [data-testid="stSidebar"] .stSelectbox select { font-size: 12px !important; padding: 2px 6px !important; }
@@ -36,7 +36,7 @@ h3 { font-size: 0.95rem !important; font-weight: 600 !important; }
 """, unsafe_allow_html=True)
 
 # ============================================================
-# 1. ENGINEERING ENGINES (TRUE BEAM MATH)
+# 1. ENGINEERING ENGINES (TRUE BEAM MATH - 3 LAYERS)
 # ============================================================
 ES = 200_000
 ECU = 0.003
@@ -50,10 +50,12 @@ class RebarGroup:
     width_req: float
     layers: list
 
-def get_rebar_group(n1, dia1, n2, dia2, cover, tie_d, clr=25) -> RebarGroup:
-    """Calculates properties for a group of bars (Top or Bottom)."""
-    if (n1 + n2) == 0: return RebarGroup(0.0, 0.0, 0.0, 0.0, [])
-    s = max(clr, 25, max(dia1, dia2))
+def get_rebar_group(n1, dia1, n2, dia2, n3, dia3, cover, tie_d, clr=25) -> RebarGroup:
+    """Calculates properties for up to 3 layers of bars."""
+    if (n1 + n2 + n3) == 0: return RebarGroup(0.0, 0.0, 0.0, 0.0, [])
+    s = max(clr, 25, max(dia1, dia2, dia3))
+    
+    # Required width is governed by the widest layer (usually layer 1)
     b_req = 2 * (cover + tie_d) + n1 * dia1 + (n1 - 1) * s if n1 > 0 else 0
     layers = []
     
@@ -67,13 +69,20 @@ def get_rebar_group(n1, dia1, n2, dia2, cover, tie_d, clr=25) -> RebarGroup:
         y2 = y1 + dia1 / 2 + s + dia2 / 2 if n1 > 0 else cover + tie_d + dia2 / 2
         layers.append((n2, dia2, y2))
         
-    tot = A1 + A2
-    yc  = (A1*y1 + A2*y2) / tot if tot > 0 else 0
-    ye  = y1 if n1 > 0 else (y2 if n2 > 0 else 0)
+    A3 = n3 * math.pi * dia3 ** 2 / 4
+    y3 = 0
+    if n3 > 0:
+        if n2 > 0: y3 = y2 + dia2 / 2 + s + dia3 / 2
+        elif n1 > 0: y3 = y1 + dia1 / 2 + s + dia3 / 2
+        else: y3 = cover + tie_d + dia3 / 2
+        layers.append((n3, dia3, y3))
+        
+    tot = A1 + A2 + A3
+    yc  = (A1*y1 + A2*y2 + A3*y3) / tot if tot > 0 else 0
+    ye  = y1 if n1 > 0 else (y2 if n2 > 0 else (y3 if n3 > 0 else 0))
     return RebarGroup(tot, yc, ye, b_req, layers)
 
 def beam_flexure(b, h, d, dt, dp, fc, fy, As, Asp):
-    """Rigorous Strain-Compatibility Solver for Beam Flexure"""
     if As == 0:
         return {'phi_Mn': 0, 'passes_As_min': False, 'is_ductile': False, 'converged': True, 'As_min': 0, 'c': 0, 'a': 0, 'eps_t': 0, 'phi': 0, 'Mn': 0}
     
@@ -86,13 +95,11 @@ def beam_flexure(b, h, d, dt, dp, fc, fy, As, Asp):
         a = min(b1 * c, h)
         Cc = 0.85 * fc * a * b
         
-        # Compression steel strain & force
         ep = ECU * (c - dp) / c if c > 0 else 0
         fp = min(fy, max(-fy, ep * ES))
         Cs = Asp * fp
-        if dp <= a and ep > 0: Cs -= Asp * 0.85 * fc # remove displaced concrete
+        if dp <= a and ep > 0: Cs -= Asp * 0.85 * fc 
         
-        # Tension steel strain & force
         es = ECU * (d - c) / c if c > 0 else 0
         T = As * min(fy, max(-fy, es * ES))
         
@@ -117,7 +124,6 @@ def beam_flexure(b, h, d, dt, dp, fc, fy, As, Asp):
     }
 
 def beam_shear(b, d, fc, fyt, cov, Vu_kN, legs, bdia):
-    """ACI 318-19 Simplified Shear for Beams"""
     if d <= 0: return {'final_s': 0, 'section_fails': True, 'phi_Vc': 0, 'phi_Vn': 0, 's_exact': 0, 's_max': 0}
     
     Vu = abs(Vu_kN) * 1000
@@ -128,18 +134,15 @@ def beam_shear(b, d, fc, fyt, cov, Vu_kN, legs, bdia):
     pVc = PHI_SHEAR * Vc
     Vsreq = max((Vu/PHI_SHEAR) - Vc, 0) if Vu > pVc/2 else 0
     
-    # Check max section capacity
     if Vsreq > 0.66 * math.sqrt(fc) * b * d:
         return {'final_s': 0, 'section_fails': True, 'phi_Vc': round(pVc/1000,1), 'phi_Vn': 0, 's_exact': 0, 's_max': 0}
         
     sreq = (Av * fyt * d) / Vsreq if Vsreq > 0 else 9999
     
-    # ACI Minimum shear reinforcement logic
     mrat = max(0.062 * math.sqrt(fc) * b / fyt, 0.35 * b / fyt)
     smin_av = Av / mrat if mrat > 0 else 9999
     sreq = min(sreq, smin_av) if Vu > pVc/2 else 9999
     
-    # Max spacing
     smxV = min(d/4, 300) if Vsreq > 0.33 * math.sqrt(fc) * b * d else min(d/2, 600)
     sex = min(sreq, smxV)
     fs = math.floor(sex/25)*25 if Vu > pVc/2 else math.floor(smxV/25)*25
@@ -154,24 +157,26 @@ def beam_shear(b, d, fc, fyt, cov, Vu_kN, legs, bdia):
     }
 
 def run_beam_optimizer(Mu_top, Mu_bot, Vu, b, h, fc, fy, fyt, cover, tie_d, clr):
-    """Separately optimizes Top and Bottom steel for a given zone's demands."""
     bars = {'DB12':12, 'DB16':16, 'DB20':20, 'DB25':25, 'DB28':28}
-    
-    # Generate valid 1-layer and 2-layer groups
     valid_groups = []
+    
+    # 1, 2, and 3 layer configurations (using same bar size to avoid hanging the browser)
     for _, d1 in bars.items():
         for n1 in range(2, 10):
-            rg = get_rebar_group(n1, d1, 0, 0, cover, tie_d, clr)
+            rg = get_rebar_group(n1, d1, 0, 0, 0, 0, cover, tie_d, clr)
             if rg.width_req <= b: valid_groups.append(rg)
             
-            for _, d2 in bars.items():
-                for n2 in range(2, 6):
-                    rg2 = get_rebar_group(n1, d1, n2, d2, cover, tie_d, clr)
-                    if rg2.width_req <= b: valid_groups.append(rg2)
+            for n2 in range(2, 6):
+                rg2 = get_rebar_group(n1, d1, n2, d1, 0, 0, cover, tie_d, clr)
+                if rg2.width_req <= b: valid_groups.append(rg2)
+                
+                for n3 in range(2, 5):
+                    rg3 = get_rebar_group(n1, d1, n2, d1, n3, d1, cover, tie_d, clr)
+                    if rg3.width_req <= b: valid_groups.append(rg3)
                     
     valid_groups.sort(key=lambda x: x.area)
     
-    best_top = valid_groups[0] # Default to minimum if no demand
+    best_top = valid_groups[0] 
     for rg in valid_groups:
         d = h - rg.centroid
         dt = h - rg.extreme_fiber
@@ -189,13 +194,11 @@ def run_beam_optimizer(Mu_top, Mu_bot, Vu, b, h, fc, fy, fyt, cover, tie_d, clr)
             best_bot = rg
             break
 
-    # Quick Shear Opt
     s_res = beam_shear(b, h - best_bot.centroid, fc, fyt, cover, Vu, 2, tie_d)
-    
     return {'top': best_top, 'bot': best_bot, 'shear': s_res}
 
 # ============================================================
-# 2. VISUALIZATION & PDF (Failsafe standard fonts/chars)
+# 2. VISUALIZATION & PDF
 # ============================================================
 def draw_section(b, h, cov, tie_d, top_rg: RebarGroup, bot_rg: RebarGroup, title="", stirrup_txt=""):
     fig, ax = plt.subplots(figsize=(3.2, 3.8), dpi=120)
@@ -242,7 +245,7 @@ def draw_envelope(df_env, frame_name):
     ax1.plot(df_env['Station'], df_env['M3_Min'], '#dc2626', lw=1.2, label='-M (Hog)')
     ax1.fill_between(df_env['Station'], df_env['M3_Min'], df_env['M3_Max'], color='#94a3b8', alpha=0.15)
     ax1.axhline(0, color='#333', lw=0.6)
-    ax1.invert_yaxis() # Tension on bottom convention
+    ax1.invert_yaxis() 
     ax1.set_ylabel("M (kNm)", fontsize=7)
     ax1.tick_params(labelsize=6.5)
     ax1.legend(fontsize=6, loc='lower right')
@@ -346,7 +349,6 @@ if use_sap:
     dr = df[df['Station'] >= 0.85*beam_length]
     dm = df[(df['Station'] > 0.3*beam_length) & (df['Station'] < 0.7*beam_length)]
     
-    # Negative M3 = Top Tension (Hogging), Positive M3 = Bot Tension (Sagging)
     forces['Left']  = {'M_top': abs(min(dl['M3'].min(), 0)), 'M_bot': max(dl['M3'].max(), 0), 'V': dl['V2_abs'].max()}
     forces['Right'] = {'M_top': abs(min(dr['M3'].min(), 0)), 'M_bot': max(dr['M3'].max(), 0), 'V': dr['V2_abs'].max()}
     forces['Mid']   = {'M_top': abs(min(dm['M3'].min(), 0)), 'M_bot': max(df['M3'].max(), 0), 'V': dm['V2_abs'].max()}
@@ -415,6 +417,9 @@ with rebar_col:
                     r2a, r2b = st.columns(2)
                     t_n2 = r2a.number_input("L2 n", 0, value=0, key=f"tn2_{zone}")
                     t_d2 = bar_opts[r2b.selectbox("L2 sz", list(bar_opts.keys()), index=2, key=f"td2_{zone}")]
+                    r3a, r3b = st.columns(2)
+                    t_n3 = r3a.number_input("L3 n", 0, value=0, key=f"tn3_{zone}")
+                    t_d3 = bar_opts[r3b.selectbox("L3 sz", list(bar_opts.keys()), index=2, key=f"td3_{zone}")]
                 with bc:
                     st.markdown("**Bottom bars**")
                     s1a, s1b = st.columns(2)
@@ -423,9 +428,12 @@ with rebar_col:
                     s2a, s2b = st.columns(2)
                     b_n2 = s2a.number_input("L2 n", 0, value=0, key=f"bn2_{zone}")
                     b_d2 = bar_opts[s2b.selectbox("L2 sz", list(bar_opts.keys()), index=2, key=f"bd2_{zone}")]
+                    s3a, s3b = st.columns(2)
+                    b_n3 = s3a.number_input("L3 n", 0, value=0, key=f"bn3_{zone}")
+                    b_d3 = bar_opts[s3b.selectbox("L3 sz", list(bar_opts.keys()), index=2, key=f"bd3_{zone}")]
 
-                top_rg = get_rebar_group(t_n1, t_d1, t_n2, t_d2, cover, bar_v, clear_space)
-                bot_rg = get_rebar_group(b_n1, b_d1, b_n2, b_d2, cover, bar_v, clear_space)
+                top_rg = get_rebar_group(t_n1, t_d1, t_n2, t_d2, t_n3, t_d3, cover, bar_v, clear_space)
+                bot_rg = get_rebar_group(b_n1, b_d1, b_n2, b_d2, b_n3, b_d3, cover, bar_v, clear_space)
                 rebar_data[zone] = {'top': top_rg, 'bot': bot_rg, 'shear_s': None}
 
 st.markdown("---")
@@ -436,6 +444,11 @@ if not st.button("▶  Run 3-Zone Design", type="primary", use_container_width=T
 # ============================================================
 cols = st.columns(3)
 pdf_zone_data = {}
+
+if fig_env is not None:
+    tmp_env = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    fig_env.savefig(tmp_env.name, bbox_inches='tight', dpi=130)
+    env_img_path = tmp_env.name
 
 for idx, zone in enumerate(["Left","Mid","Right"]):
     with cols[idx]:
@@ -448,12 +461,10 @@ for idx, zone in enumerate(["Left","Mid","Right"]):
 
         Mu_top, Mu_bot, Vu = forces[zone]['M_top'], forces[zone]['M_bot'], forces[zone]['V']
 
-        # Flexure Top (-M)
         d_top = h - top_rg.centroid; dt_top = h - top_rg.extreme_fiber; dp_top = bot_rg.centroid
         rf_top = beam_flexure(b, h, d_top, dt_top, dp_top, fc, fy, top_rg.area, bot_rg.area)
         DC_top = round(Mu_top / rf_top['phi_Mn'], 2) if rf_top['phi_Mn'] > 0 else 999
         
-        # Flexure Bot (+M)
         d_bot = h - bot_rg.centroid; dt_bot = h - bot_rg.extreme_fiber; dp_bot = top_rg.centroid
         rf_bot = beam_flexure(b, h, d_bot, dt_bot, dp_bot, fc, fy, bot_rg.area, top_rg.area)
         DC_bot = round(Mu_bot / rf_bot['phi_Mn'], 2) if rf_bot['phi_Mn'] > 0 else 999
@@ -471,7 +482,6 @@ for idx, zone in enumerate(["Left","Mid","Right"]):
             m4.metric("D/C", f"{DC_bot}", delta=f"Req {round(Mu_bot,1)}", delta_color="inverse" if DC_bot > 1.0 else "off")
             if not rf_bot['passes_As_min']: st.warning("⚠️ Fails As,min")
 
-        # Shear
         s_res = beam_shear(b, h - bot_rg.centroid, fc, fyt, cover, Vu, n_legs, bar_v)
         final_s = rebar_data[zone]['shear_s'] if auto_opt else s_res['final_s']
         DC_v = round(Vu / s_res['phi_Vn'], 2) if s_res['phi_Vn'] > 0 else 999
@@ -488,7 +498,6 @@ for idx, zone in enumerate(["Left","Mid","Right"]):
             stir_lbl = "FAILS"
             st.error("❌ Shear capacity failed.")
 
-        # Sketch
         fig_cs = draw_section(b, h, cover, bar_v, top_rg, bot_rg, zone, stir_lbl)
         st.pyplot(fig_cs, use_container_width=True)
         plt.close(fig_cs)
