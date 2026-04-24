@@ -357,8 +357,29 @@ def check_row(label, ok, detail, warn=False):
     )
 
 
-def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone):
-    fig, ax = plt.subplots(figsize=(7.0, 4.2), dpi=150)
+def calculate_skin_reinforcement(h, d, skin_bar_dia):
+    required = h > 900
+    s_limit = min(d / 6, 300) if d > 0 else 300
+    zone_height = h / 2
+    if required:
+        bars_per_side = max(2, math.ceil(zone_height / s_limit) + 1)
+        spacing = zone_height / (bars_per_side - 1)
+    else:
+        bars_per_side = 0
+        spacing = 0
+    area_per_side = bars_per_side * math.pi * skin_bar_dia**2 / 4
+    return {
+        "required": required,
+        "s_limit": round(s_limit, 1),
+        "bars_per_side": bars_per_side,
+        "spacing": round(spacing, 1),
+        "area_per_side": round(area_per_side, 1),
+        "zone_height": round(zone_height, 1),
+    }
+
+
+def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone, skin=None, skin_bar_dia=10):
+    fig, ax = plt.subplots(figsize=(1.75, 1.05), dpi=180)
     fig.patch.set_facecolor("#0f1117")
     ax.set_facecolor("#0f1117")
     ax.set_aspect("equal")
@@ -368,7 +389,7 @@ def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone):
     ax.set_xlim(-pad, b + pad * 1.65)
     ax.set_ylim(h + pad * 0.6, -pad)
 
-    ax.add_patch(patches.Rectangle((0, 0), b, h, facecolor="#1e2330", edgecolor="#4f8ef7", lw=2))
+    ax.add_patch(patches.Rectangle((0, 0), b, h, facecolor="#1e2330", edgecolor="#4f8ef7", lw=1.2))
     ax.add_patch(
         patches.Rectangle(
             (cover + tie_dia / 2, cover + tie_dia / 2),
@@ -376,7 +397,7 @@ def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone):
             h - 2 * (cover + tie_dia / 2),
             fill=False,
             edgecolor="#c084fc",
-            lw=2,
+            lw=1.1,
         )
     )
     ax.add_patch(
@@ -386,16 +407,16 @@ def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone):
             h - 2 * cover,
             fill=False,
             edgecolor="#7a84a0",
-            lw=1.3,
+            lw=0.8,
         )
     )
 
     a = max(0, min(h, flex.get("a", 0)))
     c = max(0, min(h, flex.get("c", 0)))
     ax.add_patch(patches.Rectangle((0, 0), b, a, facecolor="#4f8ef7", alpha=0.20, edgecolor="none"))
-    ax.plot([-pad * 0.18, b + pad * 0.18], [c, c], color="#f87171", lw=1.4, ls=(0, (5, 4)))
-    ax.text(b + pad * 0.25, max(12, a / 2), f"a = {flex.get('a', 0):.1f} mm", color="#93c5fd", fontsize=8)
-    ax.text(b + pad * 0.25, c, f"c = {flex.get('c', 0):.1f} mm", color="#f87171", fontsize=8, va="center")
+    ax.plot([-pad * 0.18, b + pad * 0.18], [c, c], color="#f87171", lw=0.8, ls=(0, (4, 3)))
+    ax.text(b + pad * 0.25, max(12, a / 2), f"a={flex.get('a', 0):.0f}", color="#93c5fd", fontsize=4.6)
+    ax.text(b + pad * 0.25, c, f"c={flex.get('c', 0):.0f}", color="#f87171", fontsize=4.6, va="center")
 
     def plot_layers(group, from_top=True):
         for n, dia, y_from_face in group.layers:
@@ -404,32 +425,45 @@ def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone):
             x0 = cover + tie_dia + dia / 2
             xs = [b / 2] if n == 1 else [x0 + i * usable / (n - 1) for i in range(n)]
             for x in xs:
-                ax.add_patch(patches.Circle((x, y), max(dia / 2, 4), facecolor="#fbbf24", edgecolor="#92400e", lw=1))
+                ax.add_patch(patches.Circle((x, y), max(dia / 2, 4), facecolor="#fbbf24", edgecolor="#92400e", lw=0.5))
 
     plot_layers(top_rg, True)
     plot_layers(bot_rg, False)
 
     corner_offset = cover + tie_dia + 10
     for x, y in [(corner_offset, corner_offset), (b - corner_offset, corner_offset), (corner_offset, h - corner_offset), (b - corner_offset, h - corner_offset)]:
-        ax.add_patch(patches.Circle((x, y), 6, facecolor="#c084fc", edgecolor="#5b21b6", lw=1))
+        ax.add_patch(patches.Circle((x, y), 5, facecolor="#c084fc", edgecolor="#5b21b6", lw=0.5))
 
-    ax.annotate("", xy=(0, h + pad * 0.25), xytext=(b, h + pad * 0.25), arrowprops=dict(arrowstyle="<->", color="#7a84a0", lw=1))
-    ax.text(b / 2, h + pad * 0.38, f"b = {b:.0f} mm", color="#e8eaf0", ha="center", fontsize=8)
-    ax.annotate("", xy=(b + pad * 0.55, 0), xytext=(b + pad * 0.55, h), arrowprops=dict(arrowstyle="<->", color="#7a84a0", lw=1))
-    ax.text(b + pad * 0.66, h / 2, f"h = {h:.0f} mm", color="#e8eaf0", va="center", fontsize=8)
-    ax.text(0, -pad * 0.18, f"{zone} section | torsion cage shown", color="#98a2b8", fontsize=9, weight="bold")
-    ax.text(0, h + pad * 0.55, f"Aoh = {shear.get('Aoh', 0):.0f} mm2 | ph = {shear.get('ph', 0):.0f} mm", color="#c084fc", fontsize=8)
+    if skin and skin["required"]:
+        tension_top = zone in ["Left", "Right"]
+        y_start = cover + tie_dia + skin_bar_dia / 2 if tension_top else h / 2
+        y_end = h / 2 if tension_top else h - cover - tie_dia - skin_bar_dia / 2
+        if skin["bars_per_side"] == 1:
+            y_vals = [(y_start + y_end) / 2]
+        else:
+            y_vals = [y_start + i * (y_end - y_start) / (skin["bars_per_side"] - 1) for i in range(skin["bars_per_side"])]
+        x_vals = [cover + tie_dia + skin_bar_dia / 2, b - cover - tie_dia - skin_bar_dia / 2]
+        for y in y_vals:
+            for x in x_vals:
+                ax.add_patch(patches.Circle((x, y), max(skin_bar_dia / 2, 3.5), facecolor="#38bdf8", edgecolor="#164e63", lw=0.45))
+
+    ax.annotate("", xy=(0, h + pad * 0.25), xytext=(b, h + pad * 0.25), arrowprops=dict(arrowstyle="<->", color="#7a84a0", lw=0.55))
+    ax.text(b / 2, h + pad * 0.38, f"b={b:.0f}", color="#e8eaf0", ha="center", fontsize=4.8)
+    ax.annotate("", xy=(b + pad * 0.55, 0), xytext=(b + pad * 0.55, h), arrowprops=dict(arrowstyle="<->", color="#7a84a0", lw=0.55))
+    ax.text(b + pad * 0.66, h / 2, f"h={h:.0f}", color="#e8eaf0", va="center", fontsize=4.8)
+    ax.text(0, -pad * 0.18, f"{zone}", color="#98a2b8", fontsize=5.4, weight="bold")
+    ax.text(0, h + pad * 0.55, f"Aoh={shear.get('Aoh', 0):.0f} ph={shear.get('ph', 0):.0f}", color="#c084fc", fontsize=4.8)
     return fig
 
 
 def draw_force_diagrams(forces, beam_length, df=None, selected_frame="Manual"):
-    fig, (ax_m, ax_v) = plt.subplots(2, 1, figsize=(10.5, 4.2), dpi=150, sharex=True)
+    fig, (ax_m, ax_v) = plt.subplots(2, 1, figsize=(2.65, 1.05), dpi=180, sharex=True)
     fig.patch.set_facecolor("#0f1117")
     for ax in (ax_m, ax_v):
         ax.set_facecolor("#181c24")
-        ax.grid(True, color="#364060", alpha=0.45, linestyle="--", linewidth=0.6)
-        ax.axhline(0, color="#e8eaf0", linewidth=0.8, alpha=0.75)
-        ax.tick_params(colors="#98a2b8", labelsize=8)
+        ax.grid(True, color="#364060", alpha=0.45, linestyle="--", linewidth=0.35)
+        ax.axhline(0, color="#e8eaf0", linewidth=0.45, alpha=0.75)
+        ax.tick_params(colors="#98a2b8", labelsize=4.8)
         for spine in ax.spines.values():
             spine.set_color("#2a3044")
 
@@ -441,11 +475,11 @@ def draw_force_diagrams(forces, beam_length, df=None, selected_frame="Manual"):
             .sort_values("Station")
         )
         x = df_env["Station"]
-        ax_m.plot(x, df_env["M3_Max"], color="#4f8ef7", linewidth=1.6, label="+M")
-        ax_m.plot(x, df_env["M3_Min"], color="#f87171", linewidth=1.6, label="-M")
+        ax_m.plot(x, df_env["M3_Max"], color="#4f8ef7", linewidth=0.9, label="+M")
+        ax_m.plot(x, df_env["M3_Min"], color="#f87171", linewidth=0.9, label="-M")
         ax_m.fill_between(x, df_env["M3_Min"], df_env["M3_Max"], color="#7a84a0", alpha=0.18)
-        ax_v.plot(x, df_env["V2_Max"], color="#22c55e", linewidth=1.6, label="+V")
-        ax_v.plot(x, df_env["V2_Min"], color="#fbbf24", linewidth=1.6, label="-V")
+        ax_v.plot(x, df_env["V2_Max"], color="#22c55e", linewidth=0.9, label="+V")
+        ax_v.plot(x, df_env["V2_Min"], color="#fbbf24", linewidth=0.9, label="-V")
         ax_v.fill_between(x, df_env["V2_Min"], df_env["V2_Max"], color="#22c55e", alpha=0.12)
         title = f"Frame {selected_frame} - SAP2000 Envelope"
     else:
@@ -453,21 +487,21 @@ def draw_force_diagrams(forces, beam_length, df=None, selected_frame="Manual"):
         x = [0, 0.5 * L, L]
         m = [-abs(forces["Left"]["M"]), abs(forces["Mid"]["M"]), -abs(forces["Right"]["M"])]
         v = [abs(forces["Left"]["V"]), 0, -abs(forces["Right"]["V"])]
-        ax_m.plot(x, m, color="#4f8ef7", linewidth=1.8, marker="o", label="M demand")
+        ax_m.plot(x, m, color="#4f8ef7", linewidth=0.9, marker="o", markersize=2.2, label="M")
         ax_m.fill_between(x, m, 0, color="#4f8ef7", alpha=0.13)
-        ax_v.plot(x, v, color="#22c55e", linewidth=1.8, marker="o", label="V demand")
+        ax_v.plot(x, v, color="#22c55e", linewidth=0.9, marker="o", markersize=2.2, label="V")
         ax_v.fill_between(x, v, 0, color="#22c55e", alpha=0.13)
-        ax_m.annotate(f"i -{abs(forces['Left']['M']):.1f}", (x[0], m[0]), color="#f87171", fontsize=8, xytext=(5, -14), textcoords="offset points")
-        ax_m.annotate(f"mid +{abs(forces['Mid']['M']):.1f}", (x[1], m[1]), color="#4f8ef7", fontsize=8, xytext=(5, 8), textcoords="offset points")
-        ax_m.annotate(f"j -{abs(forces['Right']['M']):.1f}", (x[2], m[2]), color="#f87171", fontsize=8, xytext=(-52, -14), textcoords="offset points")
+        ax_m.annotate(f"i -{abs(forces['Left']['M']):.0f}", (x[0], m[0]), color="#f87171", fontsize=4.8, xytext=(2, -7), textcoords="offset points")
+        ax_m.annotate(f"mid +{abs(forces['Mid']['M']):.0f}", (x[1], m[1]), color="#4f8ef7", fontsize=4.8, xytext=(2, 4), textcoords="offset points")
+        ax_m.annotate(f"j -{abs(forces['Right']['M']):.0f}", (x[2], m[2]), color="#f87171", fontsize=4.8, xytext=(-23, -7), textcoords="offset points")
         title = "Manual Design Demands"
 
-    ax_m.set_title(title, color="#e8eaf0", fontsize=11, fontweight="bold", pad=8)
-    ax_m.set_ylabel("M (kNm)", color="#98a2b8", fontsize=9)
-    ax_v.set_ylabel("V (kN)", color="#98a2b8", fontsize=9)
-    ax_v.set_xlabel("Station (m)", color="#98a2b8", fontsize=9)
-    ax_m.legend(facecolor="#181c24", edgecolor="#2a3044", labelcolor="#e8eaf0", fontsize=8, loc="best")
-    ax_v.legend(facecolor="#181c24", edgecolor="#2a3044", labelcolor="#e8eaf0", fontsize=8, loc="best")
+    ax_m.set_title(title, color="#e8eaf0", fontsize=5.8, fontweight="bold", pad=3)
+    ax_m.set_ylabel("M", color="#98a2b8", fontsize=5.2)
+    ax_v.set_ylabel("V", color="#98a2b8", fontsize=5.2)
+    ax_v.set_xlabel("Station (m)", color="#98a2b8", fontsize=5.2)
+    ax_m.legend(facecolor="#181c24", edgecolor="#2a3044", labelcolor="#e8eaf0", fontsize=4.5, loc="best")
+    ax_v.legend(facecolor="#181c24", edgecolor="#2a3044", labelcolor="#e8eaf0", fontsize=4.5, loc="best")
     plt.tight_layout()
     return fig
 
@@ -572,7 +606,7 @@ else:
 
 st.markdown("<div class='section-band'>Bending and Shear Diagram</div>", unsafe_allow_html=True)
 force_fig = draw_force_diagrams(forces, beam_length, df=df, selected_frame=selected_frame)
-st.pyplot(force_fig, use_container_width=True)
+st.pyplot(force_fig, use_container_width=False)
 plt.close(force_fig)
 
 st.markdown("<div class='section-band'>Project Input Workspace</div>", unsafe_allow_html=True)
@@ -593,6 +627,15 @@ with col_prop:
     n_legs = st.number_input("Stirrup legs", min_value=2, value=2, step=1)
     cover_clear = st.number_input("Clear cover to stirrup (mm)", value=40, step=5, min_value=20)
     clear_space = st.number_input("Minimum clear bar spacing (mm)", value=25, step=5, min_value=20)
+    st.subheader("Skin Bars")
+    skin_bar_options = {"DB10": 10, "DB12": 12, "DB16": 16, "DB20": 20}
+    skin_bar_name = st.selectbox(
+        "Side-face skin bar size",
+        list(skin_bar_options.keys()),
+        index=1,
+        help="ACI side-face longitudinal reinforcement is checked when overall beam depth exceeds 900 mm.",
+    )
+    skin_bar_dia = skin_bar_options[skin_bar_name]
 
 with col_rebar:
     st.subheader("Zone Reinforcement")
@@ -661,6 +704,7 @@ if st.button("Run full 3-zone detailing design", type="primary", use_container_w
             Vu_design = abs(forces[zone]["V"])
             res_flex = calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As_tens, As_comp)
             res_shear = calculate_shear_torsion(b, h, d, fc, fyt, fy, cover_clear, Vu_design, forces[zone]["T"], n_legs, bar_v, lambda_c)
+            skin = calculate_skin_reinforcement(h, d, skin_bar_dia)
             dev_top = calculate_development_length(bar_selections[zone]["top_d1"], fy, fc, True, cover_clear, clear_space, lambda_c)
             dev_bot = calculate_development_length(bar_selections[zone]["bot_d1"], fy, fc, False, cover_clear, clear_space, lambda_c)
             dc_flex = round(Mu / res_flex["phi_Mn"], 2) if res_flex["phi_Mn"] > 0 else 999.9
@@ -681,22 +725,25 @@ if st.button("Run full 3-zone detailing design", type="primary", use_container_w
             m3.metric("Stirrups", f"{n_legs}-{bar_v_name}", f"@ {res_shear['final_s']} mm" if res_shear["final_s"] else "FAIL")
             m4.metric("Strain", f"{res_flex['eps_t']}", res_flex["strain_class"])
 
-            left, right = st.columns([1.15, 1])
-            with left:
-                fig = draw_beam_section(b, h, cover_clear, bar_v, top_rg, bot_rg, res_flex, res_shear, zone)
-                st.pyplot(fig, use_container_width=True)
-                plt.close(fig)
-            with right:
-                st.markdown("<div class='section-band'>ACI Style Checks</div>", unsafe_allow_html=True)
-                check_row("Flexure phiMn >= Mu", res_flex["phi_Mn"] >= Mu, f"{res_flex['phi_Mn']} >= {Mu:.1f} kNm")
-                check_row("Minimum As", res_flex["passes_As_min"], f"As = {As_tens:.1f}; As,min = {res_flex['As_min']} mm2")
-                check_row("Tension-controlled", res_flex["is_ductile"], f"eps_t = {res_flex['eps_t']}; phi = {res_flex['phi']}", warn=not res_flex["is_ductile"] and res_flex["phi_Mn"] >= Mu)
-                check_row("Shear phiVn >= Vu", res_shear["phi_Vn"] >= Vu_design, f"{res_shear['phi_Vn']} >= {Vu_design:.1f} kN")
-                check_row("Transverse spacing", res_shear["final_s"] > 0, f"s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm")
-                check_row("Torsion threshold", not res_shear["needs_torsion"], f"Tu = {forces[zone]['T']:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"])
+            fig = draw_beam_section(b, h, cover_clear, bar_v, top_rg, bot_rg, res_flex, res_shear, zone, skin, skin_bar_dia)
+            st.pyplot(fig, use_container_width=False)
+            plt.close(fig)
 
-            st.markdown("<div class='section-band'>Calculation Summary</div>", unsafe_allow_html=True)
-            if True:
+            st.markdown("<div class='section-band'>ACI Style Checks</div>", unsafe_allow_html=True)
+            check_row("Flexure phiMn >= Mu", res_flex["phi_Mn"] >= Mu, f"{res_flex['phi_Mn']} >= {Mu:.1f} kNm")
+            check_row("Minimum As", res_flex["passes_As_min"], f"As = {As_tens:.1f}; As,min = {res_flex['As_min']} mm2")
+            check_row("Tension-controlled", res_flex["is_ductile"], f"eps_t = {res_flex['eps_t']}; phi = {res_flex['phi']}", warn=not res_flex["is_ductile"] and res_flex["phi_Mn"] >= Mu)
+            check_row("Shear phiVn >= Vu", res_shear["phi_Vn"] >= Vu_design, f"{res_shear['phi_Vn']} >= {Vu_design:.1f} kN")
+            check_row("Transverse spacing", res_shear["final_s"] > 0, f"s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm")
+            check_row("Torsion threshold", not res_shear["needs_torsion"], f"Tu = {forces[zone]['T']:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"])
+            skin_detail = (
+                f"h = {h:.0f} mm <= 900 mm; side-face skin bars not required"
+                if not skin["required"]
+                else f"{skin['bars_per_side']}-{skin_bar_name} each side over {skin['zone_height']} mm tension zone; s = {skin['spacing']} <= {skin['s_limit']} mm"
+            )
+            check_row("ACI side-face skin bars", True, skin_detail)
+
+            if st.toggle(f"Show calculation summary - {zone}", value=False, key=f"calc_summary_{zone}"):
                 st.dataframe(
                     pd.DataFrame(
                         [
@@ -707,6 +754,7 @@ if st.button("Run full 3-zone detailing design", type="primary", use_container_w
                             ("lambda_s", res_shear["lambda_s"], "ACI size effect factor"),
                             ("Aoh / ph", f"{res_shear['Aoh']:.0f} mm2 / {res_shear['ph']:.0f} mm", "Torsion cage geometry"),
                             ("Al torsion", f"{res_shear['Al_req']} mm2", "Required if torsion governs"),
+                            ("Skin bars", skin_detail, "ACI 318 side-face longitudinal reinforcement for h > 900 mm"),
                             ("Top ldh / lap", f"{dev_top['ldh']} / {dev_top['lap']} mm", "Development lengths"),
                             ("Bottom lap", f"{dev_bot['lap']} mm", "Development length"),
                         ],
