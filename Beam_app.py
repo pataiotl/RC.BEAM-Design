@@ -44,18 +44,18 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 div[data-testid="metric-container"] {
     border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 7px 9px;
+    padding: 5px 6px;
     background: rgba(24,28,36,.95);
 }
 div[data-testid="metric-container"] label,
 div[data-testid="metric-container"] [data-testid="stMetricLabel"] {
-    font-size: 10px !important;
+    font-size: 7px !important;
 }
 div[data-testid="metric-container"] [data-testid="stMetricValue"] {
-    font-size: 20px !important;
+    font-size: 16px !important;
 }
 div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
-    font-size: 10px !important;
+    font-size: 7px !important;
 }
 .app-hero {
     border: 1px solid var(--border);
@@ -76,47 +76,61 @@ div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
 }
 .status-card {
     border-radius: 12px;
-    padding: 13px 16px;
+    padding: 7px 10px;
     font-weight: 750;
     border: 1px solid;
-    margin: 8px 0 16px 0;
+    margin: 6px 0 10px 0;
+    font-size: 9px;
 }
 .status-pass { color: var(--pass); background: #052a14; border-color: #166534; }
 .status-fail { color: var(--fail); background: #2a0a0a; border-color: #991b1b; }
 .status-warn { color: var(--warn); background: #2a1f00; border-color: #92400e; }
 .check-row {
     display: grid;
-    grid-template-columns: 190px 1fr 82px;
-    gap: 10px;
+    grid-template-columns: 112px 1fr 54px;
+    gap: 6px;
     align-items: center;
     background: rgba(24,28,36,.95);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 12px;
-    margin-bottom: 7px;
-    font-size: 13px;
+    border-radius: 7px;
+    padding: 6px 7px;
+    margin-bottom: 4px;
+    font-size: 8.5px;
 }
 .check-label { font-weight: 800; color: var(--text); }
-.check-detail { color: var(--muted); font-family: monospace; font-size: 12px; }
+.check-detail { color: var(--muted); font-family: monospace; font-size: 7.5px; }
 .badge {
     text-align: center;
-    border-radius: 7px;
-    padding: 4px 8px;
+    border-radius: 5px;
+    padding: 3px 5px;
     font-family: monospace;
     font-weight: 800;
+    font-size: 7.5px;
 }
 .badge-pass { color: var(--pass); background: #052a14; border: 1px solid #166534; }
 .badge-fail { color: var(--fail); background: #2a0a0a; border: 1px solid #991b1b; }
 .badge-warn { color: var(--warn); background: #2a1f00; border: 1px solid #92400e; }
 .section-band {
     color: var(--muted);
-    font-size: 11px;
+    font-size: 8px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 1.1px;
     border-bottom: 1px solid var(--border);
     padding-bottom: 8px;
     margin: 20px 0 12px 0;
+}
+.zone-title {
+    font-size: 18px;
+    font-weight: 800;
+    color: var(--text);
+    margin: 6px 0 2px;
+}
+.zone-panel {
+    border: 1px solid #2a3044;
+    border-radius: 4px;
+    padding: 6px;
+    background: rgba(15,17,23,.55);
 }
 .notice {
     background: rgba(24,28,36,.95);
@@ -390,7 +404,7 @@ def calculate_skin_reinforcement(h, d, skin_bar_dia):
 
 
 def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone, skin=None, skin_bar_dia=10):
-    fig, ax = plt.subplots(figsize=(1.75, 1.05), dpi=180)
+    fig, ax = plt.subplots(figsize=(1.35, 1.15), dpi=160)
     fig.patch.set_facecolor("#0f1117")
     ax.set_facecolor("#0f1117")
     ax.set_aspect("equal")
@@ -701,11 +715,14 @@ if st.session_state.get("design_results_visible", False):
     pdf_zone_data = {}
     summary_rows = []
     st.markdown("<div class='section-band'>Three-Zone Cross Sections and Calculations</div>", unsafe_allow_html=True)
+    result_columns = st.columns(3, gap="small")
 
     for idx, zone in enumerate(["Left", "Mid", "Right"]):
-        with st.container(border=True):
+        with result_columns[idx]:
+            display_title = {"Left": "Left Support", "Mid": "Mid", "Right": "Right Support"}[zone]
             zone_label = {"Left": "i - left support", "Mid": "midspan", "Right": "j - right support"}[zone]
-            st.subheader(f"{zone} Section ({zone_label})")
+            st.markdown(f"<div class='zone-title'>{display_title}</div>", unsafe_allow_html=True)
+            st.caption(f"{zone} Section ({zone_label})")
             top_rg = rebar_data[zone]["top"]
             bot_rg = rebar_data[zone]["bot"]
             if top_rg.width_req > b or bot_rg.width_req > b:
@@ -750,7 +767,9 @@ if st.session_state.get("design_results_visible", False):
             m4.metric("Strain", f"{res_flex['eps_t']}", res_flex["strain_class"])
 
             fig = draw_beam_section(b, h, cover_clear, bar_v, top_rg, bot_rg, res_flex, res_shear, zone, skin, skin_bar_dia)
-            st.pyplot(fig, use_container_width=False)
+            img_pad_l, img_mid, img_pad_r = st.columns([0.22, 0.56, 0.22])
+            with img_mid:
+                st.pyplot(fig, use_container_width=False)
             plt.close(fig)
 
             st.markdown("<div class='section-band'>ACI Style Checks</div>", unsafe_allow_html=True)
