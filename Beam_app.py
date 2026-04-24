@@ -36,7 +36,7 @@ h3 { font-size: 0.95rem !important; font-weight: 600 !important; }
 """, unsafe_allow_html=True)
 
 # ============================================================
-# 1. ENGINEERING ENGINES (TRUE BEAM MATH - 3 LAYERS)
+# 1. ENGINEERING ENGINES (FLEXURE + COMBINED SHEAR/TORSION)
 # ============================================================
 ES = 200_000
 ECU = 0.003
@@ -51,11 +51,9 @@ class RebarGroup:
     layers: list
 
 def get_rebar_group(n1, dia1, n2, dia2, n3, dia3, cover, tie_d, clr=25) -> RebarGroup:
-    """Calculates properties for up to 3 layers of bars."""
     if (n1 + n2 + n3) == 0: return RebarGroup(0.0, 0.0, 0.0, 0.0, [])
     s = max(clr, 25, max(dia1, dia2, dia3))
     
-    # Required width is governed by the widest layer (usually layer 1)
     b_req = 2 * (cover + tie_d) + n1 * dia1 + (n1 - 1) * s if n1 > 0 else 0
     layers = []
     
@@ -123,53 +121,101 @@ def beam_flexure(b, h, d, dt, dp, fc, fy, As, Asp):
         'eps_t': round(et, 4), 'phi': round(phi, 3), 'Mn': round(Mn, 1)
     }
 
-def beam_shear(b, d, fc, fyt, cov, Vu_kN, legs, bdia):
-    if d <= 0: return {'final_s': 0, 'section_fails': True, 'phi_Vc': 0, 'phi_Vn': 0, 's_exact': 0, 's_max': 0}
+def beam_shear_torsion(b, h, d, fc, fyt, fy_long, cov, Vu_kN, Tu_kNm, legs, bdia):
+    """ACI 318-19 Combined Shear and Torsion Engine"""
+    if d <= 0: return {'final_s': 0, 'section_fails': True, 'needs_torsion': False, 'phi_Vn': 0, 'Al_req': 0}
     
     Vu = abs(Vu_kN) * 1000
+    Tu = abs(Tu_kNm) * 1e6
     Aleg = math.pi * bdia**2 / 4
-    Av = legs * Aleg
     
-    Vc = 0.17 * math.sqrt(fc) * b * d
+    lam_s = min(1.0, math.sqrt(2 / (1 + 0.004 * d)))
+    Vc = 0.17 * lam_s * math.sqrt(fc) * b * d
     pVc = PHI_SHEAR * Vc
-    Vsreq = max((Vu/PHI_SHEAR) - Vc, 0) if Vu > pVc/2 else 0
     
-    if Vsreq > 0.66 * math.sqrt(fc) * b * d:
-        return {'final_s': 0, 'section_fails': True, 'phi_Vc': round(pVc/1000,1), 'phi_Vn': 0, 's_exact': 0, 's_max': 0}
+    # Torsion Section Properties
+    x1 = b - 2 * (cov + bdia/2)
+    y1 = h - 2 * (cov + bdia/2)
+    if x1 <= 0 or y1 <= 0:
+        return {'final_s': 0, 'section_fails': True, 'needs_torsion': False, 'phi_Vn': 0, 'Al_req': 0}
         
-    sreq = (Av * fyt * d) / Vsreq if Vsreq > 0 else 9999
+    Aoh = x1 * y1
+    Ao = 0.85 * Aoh
+    ph = 2 * (x1 + y1)
+    Acp = b * h
+    pcp = 2 * (b + h)
     
-    mrat = max(0.062 * math.sqrt(fc) * b / fyt, 0.35 * b / fyt)
-    smin_av = Av / mrat if mrat > 0 else 9999
-    sreq = min(sreq, smin_av) if Vu > pVc/2 else 9999
+    # Threshold Torsion
+    Tth = PHI_SHEAR * 0.083 * math.sqrt(fc) * (Acp**2 / pcp)
+    needs_torsion = Tu > Tth
     
-    smxV = min(d/4, 300) if Vsreq > 0.33 * math.sqrt(fc) * b * d else min(d/2, 600)
-    sex = min(sreq, smxV)
-    fs = math.floor(sex/25)*25 if Vu > pVc/2 else math.floor(smxV/25)*25
+    # Cross-Section Limit Check (ACI 22.7.7.1)
+    if needs_torsion:
+        v_stress = Vu / (b * d)
+        t_stress = (Tu * ph) / (1.7 * Aoh**2)
+        comb_stress = math.sqrt(v_stress**2 + t_stress**2)
+        limit_stress = PHI_SHEAR * ((Vc / (b * d)) + 0.66 * math.sqrt(fc))
+    else:
+        comb_stress = Vu / (b * d)
+        limit_stress = PHI_SHEAR * ((Vc / (b * d)) + 0.66 * math.sqrt(fc))
+        
+    if comb_stress > limit_stress:
+        return {'final_s': 0, 'section_fails': True, 'needs_torsion': needs_torsion, 'phi_Vn': 0, 'Al_req': 0, 'T_th': round(Tth/1e6, 1)}
+        
+    # Shear Req (Av/s)
+    Vsreq = max((Vu / PHI_SHEAR) - Vc, 0)
+    av_s = Vsreq / (fyt * d) if Vsreq > 0 else 0
     
-    Vspv = Av * fyt * d / fs if fs > 0 else 0
+    # Torsion Req (At/s)
+    at_s = (Tu / PHI_SHEAR) / (2 * Ao * fyt) if needs_torsion else 0
+    
+    # Combined Transverse (per leg)
+    leg_req_s = (av_s / legs) + at_s
+    s_req = Aleg / leg_req_s if leg_req_s > 0 else 9999
+    
+    # Minimum Transverse
+    min_avt_s = max(0.062 * math.sqrt(fc) * b / fyt, 0.35 * b / fyt)
+    s_min_req = (2 * Aleg) / min_avt_s if (Vu > pVc/2 or needs_torsion) else 9999
+    s_req = min(s_req, s_min_req)
+    
+    # Maximum Spacing
+    s_max_v = min(d/4, 300) if Vsreq > 0.33 * math.sqrt(fc) * b * d else min(d/2, 600)
+    s_max_t = min(ph/8, 300) if needs_torsion else 9999
+    s_max = min(s_max_v, s_max_t)
+    
+    s_exact = min(s_req, s_max)
+    fs = math.floor(s_exact / 25) * 25 if (Vu > pVc/2 or needs_torsion) else math.floor(s_max_v / 25) * 25
+    
+    # Longitudinal Torsion Steel (Al)
+    Al_req = 0
+    if needs_torsion:
+        Al = at_s * ph * (fyt / fy_long)
+        Al_min = max(0, (0.42 * math.sqrt(fc) * Acp / fy_long) - (at_s * ph * (fyt / fy_long)))
+        Al_req = max(Al, Al_min)
+        
+    Vspv = legs * Aleg * fyt * d / fs if fs > 0 else 0
     pVn = PHI_SHEAR * (Vc + Vspv)
     
     return {
-        'final_s': fs if fs >= 50 else 0, 'section_fails': False,
-        'phi_Vc': round(pVc/1000, 1), 'phi_Vn': round(pVn/1000, 1),
-        's_exact': round(sex, 1), 's_max': round(smxV, 1)
+        'final_s': fs if fs >= 50 else 0, 
+        'section_fails': False,
+        'needs_torsion': needs_torsion,
+        'phi_Vn': round(pVn/1000, 1),
+        'Al_req': round(Al_req, 1),
+        'T_th': round(Tth/1e6, 1)
     }
 
-def run_beam_optimizer(Mu_top, Mu_bot, Vu, b, h, fc, fy, fyt, cover, tie_d, clr):
+def run_beam_optimizer(Mu_top, Mu_bot, Vu, Tu, b, h, fc, fy, fyt, cover, tie_d, clr):
     bars = {'DB12':12, 'DB16':16, 'DB20':20, 'DB25':25, 'DB28':28}
     valid_groups = []
     
-    # 1, 2, and 3 layer configurations (using same bar size to avoid hanging the browser)
     for _, d1 in bars.items():
         for n1 in range(2, 10):
             rg = get_rebar_group(n1, d1, 0, 0, 0, 0, cover, tie_d, clr)
             if rg.width_req <= b: valid_groups.append(rg)
-            
             for n2 in range(2, 6):
                 rg2 = get_rebar_group(n1, d1, n2, d1, 0, 0, cover, tie_d, clr)
                 if rg2.width_req <= b: valid_groups.append(rg2)
-                
                 for n3 in range(2, 5):
                     rg3 = get_rebar_group(n1, d1, n2, d1, n3, d1, cover, tie_d, clr)
                     if rg3.width_req <= b: valid_groups.append(rg3)
@@ -194,7 +240,7 @@ def run_beam_optimizer(Mu_top, Mu_bot, Vu, b, h, fc, fy, fyt, cover, tie_d, clr)
             best_bot = rg
             break
 
-    s_res = beam_shear(b, h - best_bot.centroid, fc, fyt, cover, Vu, 2, tie_d)
+    s_res = beam_shear_torsion(b, h - best_bot.centroid, fc, fyt, fy, cover, Vu, Tu, 2, tie_d)
     return {'top': best_top, 'bot': best_bot, 'shear': s_res}
 
 # ============================================================
@@ -300,6 +346,9 @@ def make_pdf(b, h, fc, fy, fyt, frame, env_img, zone_data, mode):
         pdf.cell(18, 5, f"  {zone}:", border=0)
         pdf.set_font("Arial",'',8.5)
         pdf.cell(W-18, 5, f"-Mu={d['Mu_top']}  +Mu={d['Mu_bot']}  |  phiMn(top)={d['phi_Mn_top']}  phiMn(bot)={d['phi_Mn_bot']}  |  Vu={d['Vu']} kN -> {d['stirrups']}", ln=True)
+        if d.get('needs_torsion'):
+            pdf.cell(18, 5, "", border=0)
+            pdf.cell(W-18, 5, f"Torsion Active (Tu > Tth). Provide additional long. steel Al = {d['Al_req']} mm2", ln=True)
         
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tp:
         pdf.output(tp.name)
@@ -314,7 +363,7 @@ def make_pdf(b, h, fc, fy, fyt, frame, env_img, zone_data, mode):
 # 3. UI - HEADER & MODE TOGGLE
 # ============================================================
 
-st.markdown("<h1>🏗️ RC Beam Designer <span style='font-weight:400;color:#666;font-size:0.75rem'>ACI 318-19 · Asymmetric Flexure · Shear</span></h1>", unsafe_allow_html=True)
+st.markdown("<h1>🏗️ RC Beam Designer <span style='font-weight:400;color:#666;font-size:0.75rem'>ACI 318-19 · Asymmetric Flexure · Shear & Torsion</span></h1>", unsafe_allow_html=True)
 st.caption("Left Support (i)  ·  Midspan  ·  Right Support (j)  —  all checked in one run")
 st.markdown("---")
 
@@ -323,7 +372,7 @@ with mode_col:
     input_mode = st.radio("**Force input source**", ["📂 SAP2000 CSV", "✏️ Manual values"], horizontal=True)
 use_sap = input_mode == "📂 SAP2000 CSV"
 
-forces = {z: {'M_top':0.0, 'M_bot':0.0, 'V':0.0} for z in ["Left","Mid","Right"]}
+forces = {z: {'M_top':0.0, 'M_bot':0.0, 'V':0.0, 'T':0.0} for z in ["Left","Mid","Right"]}
 fig_env = None
 env_img_path = None
 selected_frame = "Manual"
@@ -343,15 +392,20 @@ if use_sap:
     df = df_raw[df_raw['Frame'] == selected_frame].copy()
     if 'OutputCase' not in df.columns: df['OutputCase'] = "N/A"
     df['V2_abs'] = df['V2'].abs()
+    
+    # Failsafe for Torsion column
+    if 'T' not in df.columns: df['T'] = 0.0
+    df['T_abs'] = df['T'].abs()
+    
     beam_length  = df['Station'].max()
 
     dl = df[df['Station'] <= 0.15*beam_length]
     dr = df[df['Station'] >= 0.85*beam_length]
     dm = df[(df['Station'] > 0.3*beam_length) & (df['Station'] < 0.7*beam_length)]
     
-    forces['Left']  = {'M_top': abs(min(dl['M3'].min(), 0)), 'M_bot': max(dl['M3'].max(), 0), 'V': dl['V2_abs'].max()}
-    forces['Right'] = {'M_top': abs(min(dr['M3'].min(), 0)), 'M_bot': max(dr['M3'].max(), 0), 'V': dr['V2_abs'].max()}
-    forces['Mid']   = {'M_top': abs(min(dm['M3'].min(), 0)), 'M_bot': max(df['M3'].max(), 0), 'V': dm['V2_abs'].max()}
+    forces['Left']  = {'M_top': abs(min(dl['M3'].min(), 0)), 'M_bot': max(dl['M3'].max(), 0), 'V': dl['V2_abs'].max(), 'T': dl['T_abs'].max()}
+    forces['Right'] = {'M_top': abs(min(dr['M3'].min(), 0)), 'M_bot': max(dr['M3'].max(), 0), 'V': dr['V2_abs'].max(), 'T': dr['T_abs'].max()}
+    forces['Mid']   = {'M_top': abs(min(dm['M3'].min(), 0)), 'M_bot': max(df['M3'].max(), 0), 'V': dm['V2_abs'].max(), 'T': dm['T_abs'].max()}
 
     with st.expander("📈 Show force envelopes", expanded=True):
         df_env = df.groupby('Station').agg(M3_Max=('M3','max'), M3_Min=('M3','min'), V2_Max=('V2','max'), V2_Min=('V2','min')).reset_index()
@@ -364,9 +418,10 @@ else:
     for col, zone in zip(z_cols, ["Left","Mid","Right"]):
         with col:
             st.markdown(f"**{zone_labels[zone]}**")
-            forces[zone]['M_top'] = st.number_input("-Mu (Top Tension, kNm)", value=200.0 if zone!="Mid" else 50.0, step=10.0, min_value=0.0, key=f"mt_{zone}")
-            forces[zone]['M_bot'] = st.number_input("+Mu (Bot Tension, kNm)", value=50.0 if zone!="Mid" else 180.0, step=10.0, min_value=0.0, key=f"mb_{zone}")
+            forces[zone]['M_top'] = st.number_input("-Mu (Top, kNm)", value=200.0 if zone!="Mid" else 50.0, step=10.0, min_value=0.0, key=f"mt_{zone}")
+            forces[zone]['M_bot'] = st.number_input("+Mu (Bot, kNm)", value=50.0 if zone!="Mid" else 180.0, step=10.0, min_value=0.0, key=f"mb_{zone}")
             forces[zone]['V'] = st.number_input("Vu (kN)", value=150.0 if zone!="Mid" else 60.0, step=10.0, min_value=0.0, key=f"v_{zone}")
+            forces[zone]['T'] = st.number_input("Tu (kNm)", value=0.0, step=1.0, min_value=0.0, key=f"t_{zone}")
 
 # ============================================================
 # 4. SECTION, MATERIALS & REBAR SIDEBAR
@@ -400,10 +455,10 @@ with rebar_col:
     rebar_data = {}
 
     if auto_opt:
-        st.info("Optimizer will automatically size independent Top and Bottom layers based on +Mu and -Mu demands.")
+        st.info("Optimizer will automatically size 1 to 3 layers based on +Mu and -Mu demands.")
         for zone in ["Left", "Mid", "Right"]:
-            opt = run_beam_optimizer(forces[zone]['M_top'], forces[zone]['M_bot'], forces[zone]['V'], b, h, fc, fy, fyt, cover, bar_v, clear_space)
-            rebar_data[zone] = {'top': opt['top'], 'bot': opt['bot'], 'shear_s': opt['shear']['final_s']}
+            opt = run_beam_optimizer(forces[zone]['M_top'], forces[zone]['M_bot'], forces[zone]['V'], forces[zone]['T'], b, h, fc, fy, fyt, cover, bar_v, clear_space)
+            rebar_data[zone] = {'top': opt['top'], 'bot': opt['bot'], 'shear_s': opt['shear']['final_s'], 'shear_res': opt['shear']}
     else:
         tabs = st.tabs(["⬅ Left Support", "↔ Midspan", "➡ Right Support"])
         for tab, zone in zip(tabs, ["Left","Mid","Right"]):
@@ -434,7 +489,7 @@ with rebar_col:
 
                 top_rg = get_rebar_group(t_n1, t_d1, t_n2, t_d2, t_n3, t_d3, cover, bar_v, clear_space)
                 bot_rg = get_rebar_group(b_n1, b_d1, b_n2, b_d2, b_n3, b_d3, cover, bar_v, clear_space)
-                rebar_data[zone] = {'top': top_rg, 'bot': bot_rg, 'shear_s': None}
+                rebar_data[zone] = {'top': top_rg, 'bot': bot_rg, 'shear_s': None, 'shear_res': None}
 
 st.markdown("---")
 if not st.button("▶  Run 3-Zone Design", type="primary", use_container_width=True): st.stop()
@@ -459,12 +514,14 @@ for idx, zone in enumerate(["Left","Mid","Right"]):
             st.error(f"🚨 Bars do not fit in {b}mm width!")
             continue
 
-        Mu_top, Mu_bot, Vu = forces[zone]['M_top'], forces[zone]['M_bot'], forces[zone]['V']
+        Mu_top, Mu_bot, Vu, Tu = forces[zone]['M_top'], forces[zone]['M_bot'], forces[zone]['V'], forces[zone]['T']
 
+        # Flexure Top (-M)
         d_top = h - top_rg.centroid; dt_top = h - top_rg.extreme_fiber; dp_top = bot_rg.centroid
         rf_top = beam_flexure(b, h, d_top, dt_top, dp_top, fc, fy, top_rg.area, bot_rg.area)
         DC_top = round(Mu_top / rf_top['phi_Mn'], 2) if rf_top['phi_Mn'] > 0 else 999
         
+        # Flexure Bot (+M)
         d_bot = h - bot_rg.centroid; dt_bot = h - bot_rg.extreme_fiber; dp_bot = top_rg.centroid
         rf_bot = beam_flexure(b, h, d_bot, dt_bot, dp_bot, fc, fy, bot_rg.area, top_rg.area)
         DC_bot = round(Mu_bot / rf_bot['phi_Mn'], 2) if rf_bot['phi_Mn'] > 0 else 999
@@ -482,21 +539,26 @@ for idx, zone in enumerate(["Left","Mid","Right"]):
             m4.metric("D/C", f"{DC_bot}", delta=f"Req {round(Mu_bot,1)}", delta_color="inverse" if DC_bot > 1.0 else "off")
             if not rf_bot['passes_As_min']: st.warning("⚠️ Fails As,min")
 
-        s_res = beam_shear(b, h - bot_rg.centroid, fc, fyt, cover, Vu, n_legs, bar_v)
-        final_s = rebar_data[zone]['shear_s'] if auto_opt else s_res['final_s']
+        s_res = rebar_data[zone]['shear_res'] if auto_opt else beam_shear_torsion(b, h - bot_rg.centroid, fc, fyt, fy, cover, Vu, Tu, n_legs, bar_v)
+        final_s = s_res['final_s']
         DC_v = round(Vu / s_res['phi_Vn'], 2) if s_res['phi_Vn'] > 0 else 999
         
-        st.markdown(f"**Shear**")
+        st.markdown(f"**Shear & Torsion**")
         s1, s2 = st.columns(2)
         s1.metric("φVn", f"{s_res['phi_Vn']} kN")
         s2.metric("D/C", f"{DC_v}", delta=f"Vu {round(Vu,1)}", delta_color="inverse" if DC_v > 1.0 else "off")
         
-        if final_s > 0:
+        if s_res['section_fails']:
+            stir_lbl = "FAILS"
+            st.error("❌ Section too small for combined V+T stress.")
+        elif final_s > 0:
             stir_lbl = f"{n_legs}-DB{bar_v} @ {final_s}"
             st.success(f"✅ {stir_lbl} mm")
+            if s_res['needs_torsion']:
+                st.info(f"🔄 Tu > Tth ({s_res['T_th']} kNm). Add long. steel Al = {s_res['Al_req']} mm2 distributed.")
         else:
             stir_lbl = "FAILS"
-            st.error("❌ Shear capacity failed.")
+            st.error("❌ Shear/Torsion capacity failed.")
 
         fig_cs = draw_section(b, h, cover, bar_v, top_rg, bot_rg, zone, stir_lbl)
         st.pyplot(fig_cs, use_container_width=True)
@@ -505,7 +567,8 @@ for idx, zone in enumerate(["Left","Mid","Right"]):
         pdf_zone_data[zone] = {
             'Mu_top': round(Mu_top,1), 'phi_Mn_top': rf_top['phi_Mn'],
             'Mu_bot': round(Mu_bot,1), 'phi_Mn_bot': rf_bot['phi_Mn'],
-            'Vu': round(Vu,1), 'stirrups': stir_lbl
+            'Vu': round(Vu,1), 'stirrups': stir_lbl,
+            'needs_torsion': s_res['needs_torsion'], 'Al_req': s_res['Al_req']
         }
 
 if any(v is not None for v in pdf_zone_data.values()):
