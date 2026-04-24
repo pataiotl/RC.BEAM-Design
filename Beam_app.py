@@ -1,46 +1,18 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-import matplotlib.gridspec as gridspec
 import math
 import tempfile
 import os
 from dataclasses import dataclass
 from fpdf import FPDF
 
-# ============================================================
-# PAGE CONFIG & CSS
-# ============================================================
-st.set_page_config(page_title="RC Beam Designer", page_icon="🏗️", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide")
 
-st.markdown("""
-<style>
-html, body, [class*="css"] { font-size: 13px; }
-h1 { font-size: 1.35rem !important; font-weight: 700 !important; letter-spacing: -0.5px; }
-h2 { font-size: 1.05rem !important; font-weight: 600 !important; }
-h3 { font-size: 0.95rem !important; font-weight: 600 !important; }
-[data-testid="stSidebar"] { min-width: 270px !important; max-width: 320px !important; }
-[data-testid="stSidebar"] .block-container { padding: 0.75rem 0.75rem 1rem !important; }
-[data-testid="stSidebar"] label { font-size: 11px !important; opacity: 0.8 !important; font-weight: 500; }
-[data-testid="stSidebar"] .stNumberInput input, [data-testid="stSidebar"] .stSelectbox select { font-size: 12px !important; padding: 2px 6px !important; }
-[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 { font-size: 0.78rem !important; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.6; margin: 0.8rem 0 0.25rem; font-weight: 600 !important; }
-[data-testid="stMetric"] { background: rgba(130, 130, 130, 0.08); border: 1px solid rgba(130, 130, 130, 0.2); border-radius: 8px; padding: 10px 14px !important; }
-[data-testid="stMetricLabel"] { font-size: 10px !important; opacity: 0.7 !important; text-transform: uppercase; letter-spacing: 0.06em; }
-[data-testid="stMetricValue"] { font-size: 1.4rem !important; font-weight: 700 !important; }
-.stCaption { font-size: 11px !important; opacity: 0.7; }
-.stAlert p { font-size: 12px !important; margin: 0; }
-.stTabs [data-baseweb="tab"] { font-size: 12px !important; padding: 6px 14px !important; }
-.sec-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.6; margin: 0 0 4px; }
-</style>
-""", unsafe_allow_html=True)
 
-# ============================================================
-# 1. ENGINEERING ENGINES (FLEXURE + COMBINED SHEAR/TORSION)
-# ============================================================
-ES = 200_000
-ECU = 0.003
-PHI_SHEAR = 0.75
+# ==========================================
+# 1. THE ENGINEERING ENGINES
+# ==========================================
 
 @dataclass
 class RebarGroup:
@@ -50,528 +22,679 @@ class RebarGroup:
     width_req: float
     layers: list
 
-def get_rebar_group(n1, dia1, n2, dia2, n3, dia3, cover, tie_d, clr=25) -> RebarGroup:
-    if (n1 + n2 + n3) == 0: return RebarGroup(0.0, 0.0, 0.0, 0.0, [])
-    s = max(clr, 25, max(dia1, dia2, dia3))
-    
-    b_req = 2 * (cover + tie_d) + n1 * dia1 + (n1 - 1) * s if n1 > 0 else 0
+
+def get_rebar_group(n1, dia1, n2, dia2, n3, dia3, cover_clear, tie_dia, clear_space_input=25) -> RebarGroup:
+    if (n1 + n2 + n3) == 0:
+        return RebarGroup(0.0, 0.0, 0.0, 0.0, [])
+
+    max_dia = max(dia1 if n1 > 0 else 0, dia2 if n2 > 0 else 0, dia3 if n3 > 0 else 0)
+    eff_clear_space = max(clear_space_input, 25, max_dia)
+
+    # Check Layer 1 fit (widest — usually governs)
+    b_req = 2 * (cover_clear + tie_dia) + (n1 * dia1) + ((n1 - 1) * eff_clear_space) if n1 > 0 else 0
+
     layers = []
-    
-    A1 = n1 * math.pi * dia1 ** 2 / 4
-    y1 = cover + tie_d + dia1 / 2 if n1 > 0 else 0
+    A1 = n1 * math.pi * (dia1 ** 2) / 4
+    y1 = cover_clear + tie_dia + dia1 / 2 if n1 > 0 else 0
     if n1 > 0: layers.append((n1, dia1, y1))
-    
-    A2 = n2 * math.pi * dia2 ** 2 / 4
+
+    A2 = n2 * math.pi * (dia2 ** 2) / 4
     y2 = 0
     if n2 > 0:
-        y2 = y1 + dia1 / 2 + s + dia2 / 2 if n1 > 0 else cover + tie_d + dia2 / 2
+        y2 = y1 + dia1 / 2 + eff_clear_space + dia2 / 2 if n1 > 0 else cover_clear + tie_dia + dia2 / 2
         layers.append((n2, dia2, y2))
-        
-    A3 = n3 * math.pi * dia3 ** 2 / 4
+
+    A3 = n3 * math.pi * (dia3 ** 2) / 4
     y3 = 0
     if n3 > 0:
-        if n2 > 0: y3 = y2 + dia2 / 2 + s + dia3 / 2
-        elif n1 > 0: y3 = y1 + dia1 / 2 + s + dia3 / 2
-        else: y3 = cover + tie_d + dia3 / 2
+        if n2 > 0:
+            y3 = y2 + dia2 / 2 + eff_clear_space + dia3 / 2
+        elif n1 > 0:
+            y3 = y1 + dia1 / 2 + eff_clear_space + dia3 / 2
+        else:
+            y3 = cover_clear + tie_dia + dia3 / 2
         layers.append((n3, dia3, y3))
-        
-    tot = A1 + A2 + A3
-    yc  = (A1*y1 + A2*y2 + A3*y3) / tot if tot > 0 else 0
-    ye  = y1 if n1 > 0 else (y2 if n2 > 0 else (y3 if n3 > 0 else 0))
-    return RebarGroup(tot, yc, ye, b_req, layers)
 
-def beam_flexure(b, h, d, dt, dp, fc, fy, As, Asp):
+    total_area = A1 + A2 + A3
+    sum_Ay = (A1 * y1) + (A2 * y2) + (A3 * y3)
+    y_centroid = sum_Ay / total_area if total_area > 0 else 0
+    y_extreme = y1 if n1 > 0 else (y2 if n2 > 0 else (y3 if n3 > 0 else 0))
+
+    return RebarGroup(total_area, y_centroid, y_extreme, b_req, layers)
+
+
+def calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As, As_prime):
     if As == 0:
-        return {'phi_Mn': 0, 'passes_As_min': False, 'is_ductile': False, 'converged': True, 'As_min': 0, 'c': 0, 'a': 0, 'eps_t': 0, 'phi': 0, 'Mn': 0}
-    
-    b1 = 0.85 if fc <= 28 else max(0.65, 0.85 - 0.05 * (fc - 28) / 7)
-    Asmin = max(0.25 * math.sqrt(fc) / fy * b * d, 1.4 / fy * b * d)
-    
+        return {'phi_Mn': 0, 'passes_As_min': False, 'is_ductile': False, 'converged': True,
+                'As_min': 0, 'c': 0, 'a': 0, 'eps_t': 0, 'phi': 0, 'Mn': 0}
+    Es = 200000
+    ecu = 0.003
+    eps_y = fy / Es
+    beta1 = 0.85 if fc <= 28 else max(0.65, 0.85 - 0.05 * ((fc - 28) / 7))
+    As_min = max((0.25 * math.sqrt(fc) / fy) * b * d, (1.4 / fy) * b * d)
+
     c = d
-    conv = False
+    converged = False
     while c > 1.0:
-        a = min(b1 * c, h)
+        a = min(beta1 * c, h)
         Cc = 0.85 * fc * a * b
-        
-        ep = ECU * (c - dp) / c if c > 0 else 0
-        fp = min(fy, max(-fy, ep * ES))
-        Cs = Asp * fp
-        if dp <= a and ep > 0: Cs -= Asp * 0.85 * fc 
-        
-        es = ECU * (d - c) / c if c > 0 else 0
-        T = As * min(fy, max(-fy, es * ES))
-        
-        if Cc + Cs <= T: 
-            conv = True
+        eps_s_prime = ecu * (c - d_prime) / c if c > 0 else 0
+        fs_prime = min(fy, max(-fy, eps_s_prime * Es))
+        Cs = As_prime * fs_prime
+        if d_prime <= a and eps_s_prime > 0:
+            Cs -= As_prime * 0.85 * fc
+        eps_s = ecu * (d - c) / c if c > 0 else 0
+        fs = min(fy, max(-fy, eps_s * Es))
+        T = As * fs
+        if (Cc + Cs) <= T:
+            converged = True
             break
         c -= 0.1
-        
-    Mn = (Cc * (d - a/2) + Cs * (d - dp)) / 1e6
-    et = ECU * (dt - c) / c if c > 0 else 0
-    
-    ey = fy / ES
-    if et <= ey: phi = 0.65
-    elif et >= ey + 0.003: phi = 0.90
-    else: phi = 0.65 + 0.25 * (et - ey) / 0.003
-        
+
+    Mn_Nmm = Cc * (d - a / 2) + Cs * (d - d_prime)
+    Mn_kNm = Mn_Nmm / 1_000_000
+    eps_t = ecu * (dt - c) / c if c > 0 else 0
+
+    if eps_t <= eps_y:
+        phi = 0.65
+    elif eps_t >= (eps_y + 0.003):
+        phi = 0.90
+    else:
+        phi = 0.65 + 0.25 * ((eps_t - eps_y) / 0.003)
+
     return {
-        'phi_Mn': round(phi*Mn, 1), 'is_ductile': et >= 0.004,
-        'As_min': round(Asmin, 1), 'passes_As_min': As >= Asmin,
-        'converged': conv, 'c': round(c, 2), 'a': round(a, 2),
-        'eps_t': round(et, 4), 'phi': round(phi, 3), 'Mn': round(Mn, 1)
+        'phi_Mn': round(phi * Mn_kNm, 1), 'is_ductile': eps_t >= 0.004,
+        'As_min': round(As_min, 1), 'passes_As_min': As >= As_min,
+        'converged': converged, 'c': round(c, 2), 'a': round(a, 2),
+        'eps_t': round(eps_t, 5), 'phi': round(phi, 3), 'Mn': round(Mn_kNm, 1)
     }
 
-def beam_shear_torsion(b, h, d, fc, fyt, fy_long, cov, Vu_kN, Tu_kNm, legs, bdia):
-    """ACI 318-19 Combined Shear and Torsion Engine"""
-    if d <= 0: return {'final_s': 0, 'section_fails': True, 'needs_torsion': False, 'phi_Vn': 0, 'Al_req': 0}
-    
+
+def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n_legs, bar_dia, lambda_c):
+    if d <= 0:
+        return {'final_s': 0, 'section_fails': True, 'needs_torsion': False, 'Al_req': 0, 'Al_min': 0,
+                's_exact': 0, 's_max': 0, 'combined_stress': 0, 'stress_limit': 0,
+                'lambda_s': 1.0, 'phi_Vc': 0, 'phi_Vn': 0, 'T_th': 0}
+    phi_v = 0.75
     Vu = abs(Vu_kN) * 1000
-    Tu = abs(Tu_kNm) * 1e6
-    Aleg = math.pi * bdia**2 / 4
-    
-    lam_s = min(1.0, math.sqrt(2 / (1 + 0.004 * d)))
-    Vc = 0.17 * lam_s * math.sqrt(fc) * b * d
-    pVc = PHI_SHEAR * Vc
-    
-    # Torsion Section Properties
-    x1 = b - 2 * (cov + bdia/2)
-    y1 = h - 2 * (cov + bdia/2)
-    if x1 <= 0 or y1 <= 0:
-        return {'final_s': 0, 'section_fails': True, 'needs_torsion': False, 'phi_Vn': 0, 'Al_req': 0}
-        
+    Tu = abs(Tu_kNm) * 1_000_000
+    A_leg = math.pi * (bar_dia ** 2) / 4
+    lambda_s = min(1.0, math.sqrt(2 / (1 + 0.004 * d)))
+
+    Vc = 0.17 * lambda_s * lambda_c * math.sqrt(fc) * b * d
+    phi_Vc = phi_v * Vc
+
+    x1 = b - 2 * (cover_clear + bar_dia / 2)
+    y1 = h - 2 * (cover_clear + bar_dia / 2)
     Aoh = x1 * y1
     Ao = 0.85 * Aoh
     ph = 2 * (x1 + y1)
     Acp = b * h
     pcp = 2 * (b + h)
-    
-    # Threshold Torsion
-    Tth = PHI_SHEAR * 0.083 * math.sqrt(fc) * (Acp**2 / pcp)
-    needs_torsion = Tu > Tth
-    
-    # Cross-Section Limit Check (ACI 22.7.7.1)
+
+    T_th = phi_v * 0.083 * lambda_c * math.sqrt(fc) * (Acp ** 2 / pcp)
+    needs_torsion = Tu > T_th
+
+    Vs_req = max((Vu / phi_v) - Vc, 0) if Vu > phi_Vc / 2 else 0
+    Av_s_req = Vs_req / (fyt * d) if Vs_req > 0 else 0
+
     if needs_torsion:
-        v_stress = Vu / (b * d)
-        t_stress = (Tu * ph) / (1.7 * Aoh**2)
-        comb_stress = math.sqrt(v_stress**2 + t_stress**2)
-        limit_stress = PHI_SHEAR * ((Vc / (b * d)) + 0.66 * math.sqrt(fc))
+        At_s_req = (Tu / phi_v) / (2 * Ao * fyt)
+        At_s_for_min = max(At_s_req, 0.175 * b / fyt)
+        Al_min = max(0, (0.42 * math.sqrt(fc) * Acp / fyl) - (At_s_for_min * ph * (fyt / fyl)))
+        Al_req = max(At_s_req * ph * (fyt / fyl), Al_min)
     else:
-        comb_stress = Vu / (b * d)
-        limit_stress = PHI_SHEAR * ((Vc / (b * d)) + 0.66 * math.sqrt(fc))
-        
-    if comb_stress > limit_stress:
-        return {'final_s': 0, 'section_fails': True, 'needs_torsion': needs_torsion, 'phi_Vn': 0, 'Al_req': 0, 'T_th': round(Tth/1e6, 1)}
-        
-    # Shear Req (Av/s)
-    Vsreq = max((Vu / PHI_SHEAR) - Vc, 0)
-    av_s = Vsreq / (fyt * d) if Vsreq > 0 else 0
-    
-    # Torsion Req (At/s)
-    at_s = (Tu / PHI_SHEAR) / (2 * Ao * fyt) if needs_torsion else 0
-    
-    # Combined Transverse (per leg)
-    leg_req_s = (av_s / legs) + at_s
-    s_req = Aleg / leg_req_s if leg_req_s > 0 else 9999
-    
-    # Minimum Transverse
-    min_avt_s = max(0.062 * math.sqrt(fc) * b / fyt, 0.35 * b / fyt)
-    s_min_req = (2 * Aleg) / min_avt_s if (Vu > pVc/2 or needs_torsion) else 9999
-    s_req = min(s_req, s_min_req)
-    
-    # Maximum Spacing
-    s_max_v = min(d/4, 300) if Vsreq > 0.33 * math.sqrt(fc) * b * d else min(d/2, 600)
-    s_max_t = min(ph/8, 300) if needs_torsion else 9999
-    s_max = min(s_max_v, s_max_t)
-    
+        At_s_req, Al_req, Al_min = 0, 0, 0
+
+    req_per_outer_leg = (Av_s_req / n_legs) + At_s_req
+    s_calc = A_leg / req_per_outer_leg if req_per_outer_leg > 0 else 9999
+
+    min_combined_ratio = max(0.062 * math.sqrt(fc) * b / fyt, 0.35 * b / fyt)
+    req_per_leg_min = min_combined_ratio / 2
+    s_min_steel = A_leg / req_per_leg_min if req_per_leg_min > 0 else 9999
+
+    s_req = min(s_calc, s_min_steel)
+    s_max_shear = min(d / 4, 300) if Vs_req > (0.33 * math.sqrt(fc) * b * d) else min(d / 2, 600)
+    s_max = min(s_max_shear, min(ph / 8, 300)) if needs_torsion else s_max_shear
+
     s_exact = min(s_req, s_max)
-    fs = math.floor(s_exact / 25) * 25 if (Vu > pVc/2 or needs_torsion) else math.floor(s_max_v / 25) * 25
-    
-    # Longitudinal Torsion Steel (Al)
-    Al_req = 0
-    if needs_torsion:
-        Al = at_s * ph * (fyt / fy_long)
-        Al_min = max(0, (0.42 * math.sqrt(fc) * Acp / fy_long) - (at_s * ph * (fyt / fy_long)))
-        Al_req = max(Al, Al_min)
-        
-    Vspv = legs * Aleg * fyt * d / fs if fs > 0 else 0
-    pVn = PHI_SHEAR * (Vc + Vspv)
-    
+    final_s = math.floor(s_exact / 25) * 25
+
+    Vs_prov = (n_legs * A_leg * fyt * d / final_s) if final_s > 0 else 0
+    phi_Vn = phi_v * (Vc + Vs_prov)
+
+    v_stress = Vu / (b * d)
+    t_stress = (Tu * ph) / (1.7 * (Aoh ** 2)) if needs_torsion else 0
+    combined_stress = math.sqrt(v_stress ** 2 + t_stress ** 2)
+    stress_limit = phi_v * ((Vc / (b * d)) + 0.66 * math.sqrt(fc))
+    section_fails = combined_stress > stress_limit
+
     return {
-        'final_s': fs if fs >= 50 else 0, 
-        'section_fails': False,
-        'needs_torsion': needs_torsion,
-        'phi_Vn': round(pVn/1000, 1),
-        'Al_req': round(Al_req, 1),
-        'T_th': round(Tth/1e6, 1)
+        'final_s': 0 if final_s < 50 or section_fails else final_s,
+        'section_fails': section_fails, 'needs_torsion': needs_torsion,
+        'Al_req': round(Al_req, 1), 'Al_min': round(Al_min, 1),
+        'T_th': round(T_th / 1_000_000, 1), 'phi_Vc': round(phi_Vc / 1000, 1),
+        'phi_Vn': round(phi_Vn / 1000, 1), 'lambda_s': round(lambda_s, 3),
+        's_exact': round(s_exact, 1), 's_max': round(s_max, 1),
+        'combined_stress': round(combined_stress, 2), 'stress_limit': round(stress_limit, 2)
     }
 
-def run_beam_optimizer(Mu_top, Mu_bot, Vu, Tu, b, h, fc, fy, fyt, cover, tie_d, clr):
-    bars = {'DB12':12, 'DB16':16, 'DB20':20, 'DB25':25, 'DB28':28}
-    valid_groups = []
-    
-    for _, d1 in bars.items():
-        for n1 in range(2, 10):
-            rg = get_rebar_group(n1, d1, 0, 0, 0, 0, cover, tie_d, clr)
-            if rg.width_req <= b: valid_groups.append(rg)
-            for n2 in range(2, 6):
-                rg2 = get_rebar_group(n1, d1, n2, d1, 0, 0, cover, tie_d, clr)
-                if rg2.width_req <= b: valid_groups.append(rg2)
-                for n3 in range(2, 5):
-                    rg3 = get_rebar_group(n1, d1, n2, d1, n3, d1, cover, tie_d, clr)
-                    if rg3.width_req <= b: valid_groups.append(rg3)
-                    
-    valid_groups.sort(key=lambda x: x.area)
-    
-    best_top = valid_groups[0] 
-    for rg in valid_groups:
-        d = h - rg.centroid
-        dt = h - rg.extreme_fiber
-        res = beam_flexure(b, h, d, dt, 50, fc, fy, rg.area, 0)
-        if res['phi_Mn'] >= Mu_top and res['passes_As_min'] and res['is_ductile']:
-            best_top = rg
-            break
-            
-    best_bot = valid_groups[0]
-    for rg in valid_groups:
-        d = h - rg.centroid
-        dt = h - rg.extreme_fiber
-        res = beam_flexure(b, h, d, dt, 50, fc, fy, rg.area, 0)
-        if res['phi_Mn'] >= Mu_bot and res['passes_As_min'] and res['is_ductile']:
-            best_bot = rg
-            break
 
-    s_res = beam_shear_torsion(b, h - best_bot.centroid, fc, fyt, fy, cover, Vu, Tu, 2, tie_d)
-    return {'top': best_top, 'bot': best_bot, 'shear': s_res}
+def calculate_development_length(db, fy, fc, is_top_bar, cover_clear, clear_spacing, lambda_c):
+    if db == 0:
+        return {'ld': 0, 'lap': 0, 'ldh': 0}
+    psi_t = 1.3 if is_top_bar else 1.0
+    psi_e = 1.0
+    psi_s = 0.8 if db <= 20 else 1.0
+    cb = min(cover_clear + db / 2, clear_spacing / 2 + db / 2)
+    conf_term = min(cb / db, 2.5)
+    ld_calc = (fy / (1.1 * lambda_c * math.sqrt(fc))) * ((psi_t * psi_e * psi_s) / conf_term) * db
+    ld = max(ld_calc, 300)
+    lap_splice = max(1.3 * ld, 300)
+    ldh_calc = max((0.24 * psi_e * fy / (lambda_c * math.sqrt(fc))) * db, 8 * db, 150)
+    if db > 20:
+        ldh_calc *= 1.2
+    return {
+        'ld': math.ceil(ld / 50) * 50,
+        'lap': math.ceil(lap_splice / 50) * 50,
+        'ldh': math.ceil(ldh_calc / 50) * 50
+    }
 
-# ============================================================
-# 2. VISUALIZATION & PDF
-# ============================================================
-def draw_section(b, h, cov, tie_d, top_rg: RebarGroup, bot_rg: RebarGroup, title="", stirrup_txt=""):
-    fig, ax = plt.subplots(figsize=(3.2, 3.8), dpi=120)
-    fig.patch.set_facecolor('white')
-    ax.add_patch(patches.Rectangle((0,0), b, h, lw=1.5, edgecolor='#444', facecolor='#f0f0f0'))
-    ax.add_patch(patches.Rectangle((cov, cov), b-2*cov, h-2*cov, lw=1.0, edgecolor='#2563eb', facecolor='none', linestyle='-'))
 
-    def draw_bars(rg, is_top, color):
-        for n_bars, dia, yd in rg.layers:
-            ya = (h - yd) if is_top else yd
-            if n_bars == 1:
-                ax.add_patch(patches.Circle((b/2, ya), dia/2, facecolor=color, edgecolor='#222', lw=0.6, zorder=4))
-            else:
-                x0 = cov + tie_d + dia/2
-                sp = (b - 2*(cov+tie_d) - dia) / (n_bars - 1)
-                for i in range(n_bars):
-                    ax.add_patch(patches.Circle((x0 + i*sp, ya), dia/2, facecolor=color, edgecolor='#222', lw=0.6, zorder=4))
-            ax.text(b + 8, ya, f"{int(n_bars)}-DB{int(dia)}", fontsize=6.5, color=color, va='center', ha='left', fontweight='bold')
-
-    draw_bars(top_rg, True,  '#dc2626')
-    draw_bars(bot_rg, False, '#16a34a')
-
-    if stirrup_txt:
-        ax.text(-8, h/2, stirrup_txt, fontsize=6, color='#2563eb', ha='right', va='center', fontweight='bold', rotation=90)
-
-    ax.text(b/2, -14, f"b={int(b)}", ha='center', fontsize=6.5, color='#555')
-    ax.text(-20, h/2, f"h={int(h)}", va='center', fontsize=6.5, color='#555', rotation=90)
-
-    ax.set_xlim(-55, b + 65)
-    ax.set_ylim(-28, h + 22)
-    ax.set_aspect('equal')
-    ax.axis('off')
-    if title: ax.set_title(title, fontsize=8, fontweight='bold', pad=4, color='#333')
-    plt.tight_layout(pad=0.3)
-    return fig
-
-def draw_envelope(df_env, frame_name):
-    fig = plt.figure(figsize=(7, 2.8), dpi=100)
-    gs  = gridspec.GridSpec(2, 1, hspace=0.08, figure=fig)
-    ax1 = fig.add_subplot(gs[0])
-    ax2 = fig.add_subplot(gs[1], sharex=ax1)
-
-    ax1.plot(df_env['Station'], df_env['M3_Max'], '#1d4ed8', lw=1.2, label='+M (Sag)')
-    ax1.plot(df_env['Station'], df_env['M3_Min'], '#dc2626', lw=1.2, label='-M (Hog)')
-    ax1.fill_between(df_env['Station'], df_env['M3_Min'], df_env['M3_Max'], color='#94a3b8', alpha=0.15)
-    ax1.axhline(0, color='#333', lw=0.6)
-    ax1.invert_yaxis() 
-    ax1.set_ylabel("M (kNm)", fontsize=7)
-    ax1.tick_params(labelsize=6.5)
-    ax1.legend(fontsize=6, loc='lower right')
-    ax1.grid(True, ls=':', lw=0.4, alpha=0.6)
-    ax1.set_title(f"Envelopes - {frame_name}", fontsize=8, fontweight='bold', pad=3)
-    plt.setp(ax1.get_xticklabels(), visible=False)
-
-    ax2.plot(df_env['Station'], df_env['V2_Max'], '#16a34a', lw=1.2, label='+V')
-    ax2.plot(df_env['Station'], df_env['V2_Min'], '#ea580c', lw=1.2, label='-V')
-    ax2.fill_between(df_env['Station'], df_env['V2_Min'], df_env['V2_Max'], color='#86efac', alpha=0.2)
-    ax2.axhline(0, color='#333', lw=0.6)
-    ax2.set_xlabel("Station (m)", fontsize=7)
-    ax2.set_ylabel("V (kN)", fontsize=7)
-    ax2.tick_params(labelsize=6.5)
-    ax2.legend(fontsize=6, loc='upper right')
-    ax2.grid(True, ls=':', lw=0.4, alpha=0.6)
-
-    fig.patch.set_facecolor('white')
-    plt.tight_layout(pad=0.5)
-    return fig
-
-def make_pdf(b, h, fc, fy, fyt, frame, env_img, zone_data, mode):
+def create_pdf_report(b, h, fc, fy, fyt, frame_name, env_img_path, zone_data, input_mode):
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.add_page()
-    pdf.set_margins(14, 14, 14)
-    W = 182
+    pdf.set_margins(15, 15, 15)
+    pdf.set_auto_page_break(auto=False)
 
-    pdf.set_font("Arial", 'B', 13)
-    pdf.cell(W, 7, "RC Beam Design - ACI 318-19", ln=True, align='C')
-    pdf.set_font("Arial", '', 8.5)
-    pdf.set_text_color(120,120,120)
-    pdf.cell(W, 5, f"Frame: {frame}  |  {b}x{h} mm  |  f'c={fc} MPa  fy={fy} MPa  |  Input: {mode}", ln=True, align='C')
-    pdf.set_text_color(0,0,0)
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(0, 6, "RC Beam Design Calculation Package", ln=True, align='C')
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 5, f"Frame ID: {frame_name}  |  Code: ACI 318-19  |  Input: {input_mode}", ln=True, align='C')
+    pdf.cell(0, 5, f"Section: {b}x{h} mm  |  f'c = {fc} MPa  |  fy = {fy} MPa  |  fyt = {fyt} MPa",
+             ln=True, align='C')
     pdf.ln(3)
 
-    if env_img and os.path.exists(env_img):
-        pdf.set_font("Arial",'B',9)
-        pdf.set_fill_color(237,239,243)
-        pdf.cell(W, 6, "  1. Force Envelopes", ln=True, fill=True)
-        pdf.image(env_img, x=20, w=150)
-        pdf.set_y(pdf.get_y() + 65)
-
-    pdf.set_font("Arial",'B',9)
-    pdf.set_fill_color(237,239,243)
-    pdf.cell(W, 6, "  2. Zone Capacities & Detailing", ln=True, fill=True)
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 6, "1. Force Envelopes / Demands", ln=True)
+    if env_img_path and os.path.exists(env_img_path):
+        y_before = pdf.get_y()
+        pdf.image(env_img_path, x=35, w=140)
+        pdf.set_y(y_before + 105)
+    else:
+        pdf.set_font("Arial", 'I', 9)
+        pdf.cell(0, 6, "(Manual input — no envelope diagram)", ln=True)
     pdf.ln(2)
-    
+
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 6, "2. Zone Capacities & Detailing", ln=True)
     for zone in ["Left", "Mid", "Right"]:
-        d = zone_data.get(zone)
-        if not d: continue
-        pdf.set_font("Arial",'B',8.5)
-        pdf.cell(18, 5, f"  {zone}:", border=0)
-        pdf.set_font("Arial",'',8.5)
-        pdf.cell(W-18, 5, f"-Mu={d['Mu_top']}  +Mu={d['Mu_bot']}  |  phiMn(top)={d['phi_Mn_top']}  phiMn(bot)={d['phi_Mn_bot']}  |  Vu={d['Vu']} kN -> {d['stirrups']}", ln=True)
-        if d.get('needs_torsion'):
-            pdf.cell(18, 5, "", border=0)
-            pdf.cell(W-18, 5, f"Torsion Active (Tu > Tth). Provide additional long. steel Al = {d['Al_req']} mm2", ln=True)
-        
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tp:
-        pdf.output(tp.name)
-        with open(tp.name,"rb") as f: data = f.read()
+        data = zone_data.get(zone)
+        if not data:
+            continue
+        pdf.set_font("Arial", 'B', 9)
+        pdf.cell(15, 5, f"{zone}:", border=0)
+        pdf.set_font("Arial", '', 9)
+        txt1 = (f"Mu: {data['Mu']} kNm | phi*Mn: {data['phi_Mn']} kNm (D/C: {data['DC_flex']})   ||   "
+                f"Vu: {data['Vu']} kN -> {data['stirrups']}")
+        pdf.cell(0, 5, txt1, ln=True)
+        pdf.cell(15, 5, "", border=0)
+        if zone in ["Left", "Right"]:
+            txt2 = f"Top Hook (ldh): {data['dev_top']} mm  |  Top Lap: {data['dev_top_lap']} mm"
+        else:
+            txt2 = f"Bot Lap Splice: {data['dev_bot']} mm"
+        pdf.cell(0, 5, txt2, ln=True)
+        pdf.ln(1)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+        pdf.output(tmp_pdf.name)
+        with open(tmp_pdf.name, "rb") as f:
+            pdf_bytes = f.read()
     try:
-        if env_img and os.path.exists(env_img): os.remove(env_img)
-        os.remove(tp.name)
-    except: pass
-    return data
+        if env_img_path and os.path.exists(env_img_path):
+            os.remove(env_img_path)
+        os.remove(tmp_pdf.name)
+    except Exception:
+        pass
+    return pdf_bytes
 
-# ============================================================
-# 3. UI - HEADER & MODE TOGGLE
-# ============================================================
 
-st.markdown("<h1>🏗️ RC Beam Designer <span style='font-weight:400;color:#666;font-size:0.75rem'>ACI 318-19 · Asymmetric Flexure · Shear & Torsion</span></h1>", unsafe_allow_html=True)
-st.caption("Left Support (i)  ·  Midspan  ·  Right Support (j)  —  all checked in one run")
+# ==========================================
+# 2. THE WEB INTERFACE
+# ==========================================
+
+st.title("🏗️ RC Beam Designer — ACI 318-19")
+st.caption("3-zone design: Left Support (i) · Midspan · Right Support (j)")
+
+# ---- INPUT MODE TOGGLE ----
+st.markdown("### Force Input Source")
+input_mode = st.radio(
+    "Select how to input beam forces:",
+    ["📂 SAP2000 CSV Upload", "✏️ Manual Input"],
+    horizontal=True,
+    help="SAP2000 mode reads forces automatically from a CSV export. Manual mode lets you type demands directly."
+)
+use_sap = input_mode == "📂 SAP2000 CSV Upload"
+
 st.markdown("---")
 
-mode_col, _ = st.columns([3, 5])
-with mode_col:
-    input_mode = st.radio("**Force input source**", ["📂 SAP2000 CSV", "✏️ Manual values"], horizontal=True)
-use_sap = input_mode == "📂 SAP2000 CSV"
-
-forces = {z: {'M_top':0.0, 'M_bot':0.0, 'V':0.0, 'T':0.0} for z in ["Left","Mid","Right"]}
+# ---- DEFAULT FORCES (filled either by SAP2000 or manual inputs) ----
+forces = {
+    'Left':  {'M': 0.0, 'V': 0.0, 'T': 0.0},
+    'Mid':   {'M': 0.0, 'V': 0.0, 'T': 0.0},
+    'Right': {'M': 0.0, 'V': 0.0, 'T': 0.0},
+}
+beam_length = 0.0
 fig_env = None
 env_img_path = None
 selected_frame = "Manual"
 df = None
+max_V2_raw = 0.0
+combo_V2 = "—"
+stat_V2 = 0.0
 
+# ==========================================
+# PATH A — SAP2000 CSV
+# ==========================================
 if use_sap:
-    up = st.file_uploader("SAP2000 frame-forces CSV", type=["csv"], label_visibility="collapsed")
-    if up is None: st.stop()
-    df_raw = pd.read_csv(up)
-    if 'Frame' in df_raw.columns and str(df_raw['Frame'].iloc[0]).strip().lower() == 'text': df_raw = df_raw.drop(0).reset_index(drop=True)
-    for col in ['Station','P','V2','V3','T','M2','M3']:
-        if col in df_raw.columns: df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce')
+    uploaded_file = st.file_uploader("Upload RAW SAP2000 frame-forces CSV", type=["csv"])
 
-    hdr_col, beam_sel_col = st.columns([2, 3])
-    selected_frame = beam_sel_col.selectbox("Select beam (Frame ID)", df_raw['Frame'].unique())
+    if uploaded_file is not None:
+        df_raw = pd.read_csv(uploaded_file)
+        if 'Frame' in df_raw.columns and str(df_raw['Frame'].iloc[0]).strip().lower() == 'text':
+            df_raw = df_raw.drop(0).reset_index(drop=True)
+        for col in ['Station', 'P', 'V2', 'V3', 'T', 'M2', 'M3']:
+            if col in df_raw.columns:
+                df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce')
 
-    df = df_raw[df_raw['Frame'] == selected_frame].copy()
-    if 'OutputCase' not in df.columns: df['OutputCase'] = "N/A"
-    df['V2_abs'] = df['V2'].abs()
-    
-    # Failsafe for Torsion column
-    if 'T' not in df.columns: df['T'] = 0.0
-    df['T_abs'] = df['T'].abs()
-    
-    beam_length  = df['Station'].max()
+        if 'Frame' in df_raw.columns:
+            selected_frame = st.sidebar.selectbox("Select Beam (Frame)", df_raw['Frame'].unique())
+            df = df_raw[df_raw['Frame'] == selected_frame].copy()
+            if 'OutputCase' not in df.columns:
+                df['OutputCase'] = "Manual"
+            df['V2_abs'] = df['V2'].abs()
+            df['T_abs']  = df['T'].abs()
+            beam_length  = df['Station'].max()
 
-    dl = df[df['Station'] <= 0.15*beam_length]
-    dr = df[df['Station'] >= 0.85*beam_length]
-    dm = df[(df['Station'] > 0.3*beam_length) & (df['Station'] < 0.7*beam_length)]
-    
-    forces['Left']  = {'M_top': abs(min(dl['M3'].min(), 0)), 'M_bot': max(dl['M3'].max(), 0), 'V': dl['V2_abs'].max(), 'T': dl['T_abs'].max()}
-    forces['Right'] = {'M_top': abs(min(dr['M3'].min(), 0)), 'M_bot': max(dr['M3'].max(), 0), 'V': dr['V2_abs'].max(), 'T': dr['T_abs'].max()}
-    forces['Mid']   = {'M_top': abs(min(dm['M3'].min(), 0)), 'M_bot': max(df['M3'].max(), 0), 'V': dm['V2_abs'].max(), 'T': dm['T_abs'].max()}
+            # --- Zone extraction ---
+            df_left  = df[df['Station'] <= 0.1 * beam_length]
+            df_right = df[df['Station'] >= 0.9 * beam_length]
+            df_mid   = df[(df['Station'] > 0.3 * beam_length) & (df['Station'] < 0.7 * beam_length)]
 
-    with st.expander("📈 Show force envelopes", expanded=True):
-        df_env = df.groupby('Station').agg(M3_Max=('M3','max'), M3_Min=('M3','min'), V2_Max=('V2','max'), V2_Min=('V2','min')).reset_index()
-        fig_env = draw_envelope(df_env, selected_frame)
-        st.pyplot(fig_env, use_container_width=True)
-else:
-    st.markdown("<p class='sec-label'>Enter factored demands per zone (absolute values)</p>", unsafe_allow_html=True)
-    z_cols = st.columns(3)
-    zone_labels = {"Left":"Left Support (i)", "Mid": "Midspan", "Right":"Right Support (j)"}
-    for col, zone in zip(z_cols, ["Left","Mid","Right"]):
-        with col:
-            st.markdown(f"**{zone_labels[zone]}**")
-            forces[zone]['M_top'] = st.number_input("-Mu (Top, kNm)", value=200.0 if zone!="Mid" else 50.0, step=10.0, min_value=0.0, key=f"mt_{zone}")
-            forces[zone]['M_bot'] = st.number_input("+Mu (Bot, kNm)", value=50.0 if zone!="Mid" else 180.0, step=10.0, min_value=0.0, key=f"mb_{zone}")
-            forces[zone]['V'] = st.number_input("Vu (kN)", value=150.0 if zone!="Mid" else 60.0, step=10.0, min_value=0.0, key=f"v_{zone}")
-            forces[zone]['T'] = st.number_input("Tu (kNm)", value=0.0, step=1.0, min_value=0.0, key=f"t_{zone}")
+            forces['Left']['M']  = df_left['M3'].min()  if not df_left.empty  else 0
+            forces['Left']['V']  = df_left['V2_abs'].max()  if not df_left.empty  else 0
+            forces['Left']['T']  = df_left['T_abs'].max()  if not df_left.empty  else 0
+            forces['Right']['M'] = df_right['M3'].min() if not df_right.empty else 0
+            forces['Right']['V'] = df_right['V2_abs'].max() if not df_right.empty else 0
+            forces['Right']['T'] = df_right['T_abs'].max() if not df_right.empty else 0
+            forces['Mid']['M']   = df['M3'].max()
+            forces['Mid']['V']   = df_mid['V2_abs'].max() if not df_mid.empty else 0
+            forces['Mid']['T']   = df_mid['T_abs'].max() if not df_mid.empty else 0
 
-# ============================================================
-# 4. SECTION, MATERIALS & REBAR SIDEBAR
-# ============================================================
-st.markdown("---")
-prop_col, rebar_col = st.columns([1, 2])
+            # --- Info banner ---
+            st.write(f"### Beam: {selected_frame}  (L = {beam_length} m)")
+            h_min_req = (beam_length * 1000) / 18.5
+            st.info(
+                f"**Deflection control (ACI Table 9.3.1.1):** h_min ≈ {round(h_min_req, 1)} mm  "
+                f"(L/18.5 — one-end-continuous). Adjust for actual end conditions.",
+                icon="ℹ️"
+            )
 
-with prop_col:
-    st.markdown("<p class='sec-label'>Section & materials</p>", unsafe_allow_html=True)
-    pc1, pc2 = st.columns(2)
-    b  = pc1.number_input("b (mm)", value=300, step=50)
-    h  = pc2.number_input("h (mm)", value=600, step=50)
-    fc = pc1.number_input("f'c (MPa)", value=35, step=5)
-    fy = pc2.number_input("fy (MPa)", value=500, step=10)
+            # --- Envelope plot (Ultra Compact) ---
+            df_env = df.groupby('Station').agg(
+                M3_Max=('M3', 'max'), M3_Min=('M3', 'min'),
+                V2_Max=('V2', 'max'), V2_Min=('V2', 'min')
+            ).reset_index()
 
-    st.markdown("<p class='sec-label'>Stirrups & Cover</p>", unsafe_allow_html=True)
-    fyt_col, bv_col, legs_col = st.columns(3)
-    fyt   = fyt_col.number_input("fyt (MPa)", value=400, step=10)
-    bv_opts = {'RB9':9,'DB10':10,'DB12':12}
-    bar_v = bv_opts[bv_col.selectbox("Size", list(bv_opts.keys()), index=1)]
-    n_legs = legs_col.number_input("Legs", min_value=2, value=2)
-    cov_col, clr_col = st.columns(2)
-    cover = cov_col.number_input("Cover (mm)", value=40, step=5)
-    clear_space = clr_col.number_input("Clr sp (mm)", value=25, step=5)
-
-with rebar_col:
-    st.markdown("<p class='sec-label'>Zone reinforcement</p>", unsafe_allow_html=True)
-    auto_opt = st.checkbox("🚀 Auto-Design Optimal Bars for Me", value=False)
-    
-    bar_opts = {'DB12':12,'DB16':16,'DB20':20,'DB25':25,'DB28':28,'DB32':32}
-    rebar_data = {}
-
-    if auto_opt:
-        st.info("Optimizer will automatically size 1 to 3 layers based on +Mu and -Mu demands.")
-        for zone in ["Left", "Mid", "Right"]:
-            opt = run_beam_optimizer(forces[zone]['M_top'], forces[zone]['M_bot'], forces[zone]['V'], forces[zone]['T'], b, h, fc, fy, fyt, cover, bar_v, clear_space)
-            rebar_data[zone] = {'top': opt['top'], 'bot': opt['bot'], 'shear_s': opt['shear']['final_s'], 'shear_res': opt['shear']}
-    else:
-        tabs = st.tabs(["⬅ Left Support", "↔ Midspan", "➡ Right Support"])
-        for tab, zone in zip(tabs, ["Left","Mid","Right"]):
-            with tab:
-                tc, bc = st.columns(2)
-                with tc:
-                    st.markdown("**Top bars**")
-                    r1a, r1b = st.columns(2)
-                    t_n1 = r1a.number_input("L1 n", 0, value=4 if zone!="Mid" else 2, key=f"tn1_{zone}")
-                    t_d1 = bar_opts[r1b.selectbox("L1 sz", list(bar_opts.keys()), index=3, key=f"td1_{zone}")]
-                    r2a, r2b = st.columns(2)
-                    t_n2 = r2a.number_input("L2 n", 0, value=0, key=f"tn2_{zone}")
-                    t_d2 = bar_opts[r2b.selectbox("L2 sz", list(bar_opts.keys()), index=2, key=f"td2_{zone}")]
-                    r3a, r3b = st.columns(2)
-                    t_n3 = r3a.number_input("L3 n", 0, value=0, key=f"tn3_{zone}")
-                    t_d3 = bar_opts[r3b.selectbox("L3 sz", list(bar_opts.keys()), index=2, key=f"td3_{zone}")]
-                with bc:
-                    st.markdown("**Bottom bars**")
-                    s1a, s1b = st.columns(2)
-                    b_n1 = s1a.number_input("L1 n", 0, value=2 if zone!="Mid" else 4, key=f"bn1_{zone}")
-                    b_d1 = bar_opts[s1b.selectbox("L1 sz", list(bar_opts.keys()), index=3, key=f"bd1_{zone}")]
-                    s2a, s2b = st.columns(2)
-                    b_n2 = s2a.number_input("L2 n", 0, value=0, key=f"bn2_{zone}")
-                    b_d2 = bar_opts[s2b.selectbox("L2 sz", list(bar_opts.keys()), index=2, key=f"bd2_{zone}")]
-                    s3a, s3b = st.columns(2)
-                    b_n3 = s3a.number_input("L3 n", 0, value=0, key=f"bn3_{zone}")
-                    b_d3 = bar_opts[s3b.selectbox("L3 sz", list(bar_opts.keys()), index=2, key=f"bd3_{zone}")]
-
-                top_rg = get_rebar_group(t_n1, t_d1, t_n2, t_d2, t_n3, t_d3, cover, bar_v, clear_space)
-                bot_rg = get_rebar_group(b_n1, b_d1, b_n2, b_d2, b_n3, b_d3, cover, bar_v, clear_space)
-                rebar_data[zone] = {'top': top_rg, 'bot': bot_rg, 'shear_s': None, 'shear_res': None}
-
-st.markdown("---")
-if not st.button("▶  Run 3-Zone Design", type="primary", use_container_width=True): st.stop()
-
-# ============================================================
-# 5. RESULTS DASHBOARD
-# ============================================================
-cols = st.columns(3)
-pdf_zone_data = {}
-
-if fig_env is not None:
-    tmp_env = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    fig_env.savefig(tmp_env.name, bbox_inches='tight', dpi=130)
-    env_img_path = tmp_env.name
-
-for idx, zone in enumerate(["Left","Mid","Right"]):
-    with cols[idx]:
-        top_rg, bot_rg = rebar_data[zone]['top'], rebar_data[zone]['bot']
-        st.markdown(f"### {zone}")
-
-        if top_rg.width_req > b or bot_rg.width_req > b:
-            st.error(f"🚨 Bars do not fit in {b}mm width!")
-            continue
-
-        Mu_top, Mu_bot, Vu, Tu = forces[zone]['M_top'], forces[zone]['M_bot'], forces[zone]['V'], forces[zone]['T']
-
-        # Flexure Top (-M)
-        d_top = h - top_rg.centroid; dt_top = h - top_rg.extreme_fiber; dp_top = bot_rg.centroid
-        rf_top = beam_flexure(b, h, d_top, dt_top, dp_top, fc, fy, top_rg.area, bot_rg.area)
-        DC_top = round(Mu_top / rf_top['phi_Mn'], 2) if rf_top['phi_Mn'] > 0 else 999
-        
-        # Flexure Bot (+M)
-        d_bot = h - bot_rg.centroid; dt_bot = h - bot_rg.extreme_fiber; dp_bot = top_rg.centroid
-        rf_bot = beam_flexure(b, h, d_bot, dt_bot, dp_bot, fc, fy, bot_rg.area, top_rg.area)
-        DC_bot = round(Mu_bot / rf_bot['phi_Mn'], 2) if rf_bot['phi_Mn'] > 0 else 999
-
-        with st.container():
-            st.markdown(f"**Flexure: Top Steel (-M)**")
-            m1, m2 = st.columns(2)
-            m1.metric("φMn", f"{rf_top['phi_Mn']} kNm")
-            m2.metric("D/C", f"{DC_top}", delta=f"Req {round(Mu_top,1)}", delta_color="inverse" if DC_top > 1.0 else "off")
-            if not rf_top['passes_As_min']: st.warning("⚠️ Fails As,min")
+            fig_env, (ax1, ax2) = plt.subplots(2, 1, figsize=(4, 2.5), sharex=True, dpi=90)
             
-            st.markdown(f"**Flexure: Bottom Steel (+M)**")
-            m3, m4 = st.columns(2)
-            m3.metric("φMn", f"{rf_bot['phi_Mn']} kNm")
-            m4.metric("D/C", f"{DC_bot}", delta=f"Req {round(Mu_bot,1)}", delta_color="inverse" if DC_bot > 1.0 else "off")
-            if not rf_bot['passes_As_min']: st.warning("⚠️ Fails As,min")
+            ax1.plot(df_env['Station'], df_env['M3_Max'], color='blue', linewidth=1, label='+M')
+            ax1.plot(df_env['Station'], df_env['M3_Min'], color='red',  linewidth=1, label='−M')
+            ax1.fill_between(df_env['Station'], df_env['M3_Min'], df_env['M3_Max'], color='gray', alpha=0.15)
+            ax1.axhline(0, color='black', linewidth=0.5)
+            ax1.set_ylabel("M", fontsize=7)
+            ax1.invert_yaxis()
+            ax1.legend(fontsize=6, loc="lower right")
+            ax1.grid(True, linestyle='--', alpha=0.4, linewidth=0.5)
+            ax1.set_title(f"Frame {selected_frame}", fontweight='bold', fontsize=8)
+            ax1.tick_params(axis='both', which='major', labelsize=6)
 
-        s_res = rebar_data[zone]['shear_res'] if auto_opt else beam_shear_torsion(b, h - bot_rg.centroid, fc, fyt, fy, cover, Vu, Tu, n_legs, bar_v)
-        final_s = s_res['final_s']
-        DC_v = round(Vu / s_res['phi_Vn'], 2) if s_res['phi_Vn'] > 0 else 999
-        
-        st.markdown(f"**Shear & Torsion**")
-        s1, s2 = st.columns(2)
-        s1.metric("φVn", f"{s_res['phi_Vn']} kN")
-        s2.metric("D/C", f"{DC_v}", delta=f"Vu {round(Vu,1)}", delta_color="inverse" if DC_v > 1.0 else "off")
-        
-        if s_res['section_fails']:
-            stir_lbl = "FAILS"
-            st.error("❌ Section too small for combined V+T stress.")
-        elif final_s > 0:
-            stir_lbl = f"{n_legs}-DB{bar_v} @ {final_s}"
-            st.success(f"✅ {stir_lbl} mm")
-            if s_res['needs_torsion']:
-                st.info(f"🔄 Tu > Tth ({s_res['T_th']} kNm). Add long. steel Al = {s_res['Al_req']} mm2 distributed.")
+            ax2.plot(df_env['Station'], df_env['V2_Max'], color='green',     linewidth=1, label='+V')
+            ax2.plot(df_env['Station'], df_env['V2_Min'], color='darkorange', linewidth=1, label='−V')
+            ax2.fill_between(df_env['Station'], df_env['V2_Min'], df_env['V2_Max'], color='lightgreen', alpha=0.2)
+            ax2.axhline(0, color='black', linewidth=0.5)
+            ax2.set_xlabel("Station (m)", fontsize=7)
+            ax2.set_ylabel("V", fontsize=7)
+            ax2.legend(fontsize=6, loc="upper right")
+            ax2.grid(True, linestyle='--', alpha=0.4, linewidth=0.5)
+            ax2.tick_params(axis='both', which='major', labelsize=6)
+            
+            plt.tight_layout()
+            
+            st.pyplot(fig_env, use_container_width=False) 
+
+            # --- Critical demands metrics ---
+            idx_pos_M = df['M3'].idxmax()
+            idx_neg_M = df['M3'].idxmin()
+            idx_V2    = df['V2_abs'].idxmax()
+            idx_T     = df['T_abs'].idxmax()
+            max_V2_raw = df.loc[idx_V2, 'V2_abs']
+            combo_V2   = df.loc[idx_V2, 'OutputCase']
+            stat_V2    = df.loc[idx_V2, 'Station']
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Max +M", f"{round(df.loc[idx_pos_M,'M3'],1)} kNm",
+                      f"{df.loc[idx_pos_M,'OutputCase']} @ {df.loc[idx_pos_M,'Station']}m", delta_color="off")
+            c2.metric("Max −M", f"{round(abs(df.loc[idx_neg_M,'M3']),1)} kNm",
+                      f"{df.loc[idx_neg_M,'OutputCase']} @ {df.loc[idx_neg_M,'Station']}m", delta_color="off")
+            c3.metric("Max V2", f"{round(max_V2_raw,1)} kN",
+                      f"{combo_V2} @ {stat_V2}m", delta_color="off")
+            c4.metric("Max T",  f"{round(df.loc[idx_T,'T_abs'],1)} kNm",
+                      f"{df.loc[idx_T,'OutputCase']} @ {df.loc[idx_T,'Station']}m", delta_color="off")
         else:
-            stir_lbl = "FAILS"
-            st.error("❌ Shear/Torsion capacity failed.")
+            st.error("CSV must contain a 'Frame' column. Check your SAP2000 export.")
+    else:
+        st.info("Upload a SAP2000 CSV file to begin.")
 
-        fig_cs = draw_section(b, h, cover, bar_v, top_rg, bot_rg, zone, stir_lbl)
-        st.pyplot(fig_cs, use_container_width=True)
-        plt.close(fig_cs)
+# ==========================================
+# PATH B — MANUAL INPUT
+# ==========================================
+else:
+    st.markdown("#### Manual Force Input")
+    st.caption(
+        "Enter the factored design forces (Mu, Vu, Tu) for each zone directly. "
+        "Moments are absolute values — sign convention is handled by zone."
+    )
 
-        pdf_zone_data[zone] = {
-            'Mu_top': round(Mu_top,1), 'phi_Mn_top': rf_top['phi_Mn'],
-            'Mu_bot': round(Mu_bot,1), 'phi_Mn_bot': rf_bot['phi_Mn'],
-            'Vu': round(Vu,1), 'stirrups': stir_lbl,
-            'needs_torsion': s_res['needs_torsion'], 'Al_req': s_res['Al_req']
-        }
+    beam_length = st.number_input("Beam span L (m) — used for deflection h_min note only",
+                                  value=6.0, step=0.5, min_value=1.0)
+    h_min_req = (beam_length * 1000) / 18.5
+    st.info(
+        f"**Deflection control (ACI Table 9.3.1.1):** h_min ≈ {round(h_min_req,1)} mm  "
+        f"(L/18.5 — one-end-continuous). Adjust for actual end conditions.",
+        icon="ℹ️"
+    )
 
-if any(v is not None for v in pdf_zone_data.values()):
     st.markdown("---")
-    pdf_bytes = make_pdf(b, h, fc, fy, fyt, selected_frame, env_img_path, pdf_zone_data, "SAP2000" if use_sap else "Manual")
-    st.download_button("📄 Download PDF report", data=pdf_bytes, file_name=f"Beam_{selected_frame}.pdf", type="primary")
+    man_col1, man_col2, man_col3 = st.columns(3)
+
+    with man_col1:
+        st.markdown("##### Left Support (i)")
+        st.caption("Negative moment region — top bars in tension.")
+        forces['Left']['M'] = st.number_input("Mu, left (kNm)", value=200.0, step=5.0,
+                                               min_value=0.0, key="m_left",
+                                               help="Factored bending moment magnitude at left support")
+        forces['Left']['V'] = st.number_input("Vu, left (kN)",  value=150.0, step=5.0,
+                                               min_value=0.0, key="v_left",
+                                               help="Factored shear at distance d from left support face")
+        forces['Left']['T'] = st.number_input("Tu, left (kNm)", value=0.0,   step=1.0,
+                                               min_value=0.0, key="t_left",
+                                               help="Factored torsion at left zone")
+
+    with man_col2:
+        st.markdown("##### Midspan")
+        st.caption("Positive moment region — bottom bars in tension.")
+        forces['Mid']['M'] = st.number_input("Mu, mid (kNm)", value=180.0, step=5.0,
+                                              min_value=0.0, key="m_mid",
+                                              help="Factored bending moment magnitude at midspan")
+        forces['Mid']['V'] = st.number_input("Vu, mid (kN)",  value=60.0,  step=5.0,
+                                              min_value=0.0, key="v_mid",
+                                              help="Factored shear at midspan zone")
+        forces['Mid']['T'] = st.number_input("Tu, mid (kNm)", value=0.0,   step=1.0,
+                                              min_value=0.0, key="t_mid",
+                                              help="Factored torsion at midspan")
+
+    with man_col3:
+        st.markdown("##### Right Support (j)")
+        st.caption("Negative moment region — top bars in tension.")
+        forces['Right']['M'] = st.number_input("Mu, right (kNm)", value=220.0, step=5.0,
+                                                min_value=0.0, key="m_right",
+                                                help="Factored bending moment magnitude at right support")
+        forces['Right']['V'] = st.number_input("Vu, right (kN)",  value=155.0, step=5.0,
+                                                min_value=0.0, key="v_right",
+                                                help="Factored shear at distance d from right support face")
+        forces['Right']['T'] = st.number_input("Tu, right (kNm)", value=0.0,   step=1.0,
+                                                min_value=0.0, key="t_right",
+                                                help="Factored torsion at right zone")
+
+    st.markdown("---")
+    st.markdown("**Demand summary (entered values):**")
+    s1, s2, s3 = st.columns(3)
+    for col, zone in zip([s1, s2, s3], ["Left", "Mid", "Right"]):
+        col.metric(f"{zone}  Mu", f"{forces[zone]['M']} kNm")
+        col.metric(f"{zone}  Vu", f"{forces[zone]['V']} kN")
+        col.metric(f"{zone}  Tu", f"{forces[zone]['T']} kNm")
+
+    selected_frame = "Manual"
+
+# ==========================================
+# SHARED — SECTION & REBAR INPUTS
+# ==========================================
+
+st.markdown("---")
+col_prop, col_rebar = st.columns([1, 2])
+
+with col_prop:
+    st.header("Section & Materials")
+    b = st.number_input("Width (b) mm", value=300, step=50, min_value=150)
+    h = st.number_input("Total Depth (h) mm", value=600, step=50, min_value=200)
+    fc = st.number_input("Concrete f'c (MPa)", value=35, step=5, min_value=20)
+    lambda_c = st.selectbox("Concrete type (λ)", [1.0, 0.85, 0.75],
+                             format_func=lambda x: {1.0: "1.0 — Normal weight",
+                                                    0.85: "0.85 — Sand-lightweight",
+                                                    0.75: "0.75 — All-lightweight"}[x])
+    st.header("Transverse Steel")
+    fyt = st.number_input("Stirrup fy (MPa)", value=400, step=10, min_value=240)
+    bar_v_options = {'RB9': 9, 'DB10': 10, 'DB12': 12, 'DB16': 16}
+    bar_v = bar_v_options[st.selectbox("Stirrup size", list(bar_v_options.keys()), index=1)]
+    n_legs    = st.number_input("Stirrup legs", min_value=2, value=2, step=1)
+    cover_clear = st.number_input("Clear cover to stirrup (mm)", value=40, step=5, min_value=20)
+    clear_space = st.number_input("Min clear bar spacing (mm)", value=25, step=5, min_value=20)
+
+with col_rebar:
+    st.header("Zone Reinforcement")
+    fy = st.number_input("Main steel fy (MPa)", value=500, step=10, min_value=300)
+    bar_opts = {'DB12': 12, 'DB16': 16, 'DB20': 20, 'DB25': 25, 'DB28': 28, 'DB32': 32}
+
+    tabs = st.tabs(["Left Support (i)", "Midspan", "Right Support (j)"])
+    rebar_data    = {}
+    bar_selections = {}
+
+    for i, zone in enumerate(["Left", "Mid", "Right"]):
+        with tabs[i]:
+            def_t = 4 if zone in ["Left", "Right"] else 2
+            def_b = 4 if zone == "Mid" else 2
+
+            c1z, c2z = st.columns(2)
+            with c1z:
+                st.write("**Top Bars**")
+                t1c, t1s = st.columns(2)
+                t_n1      = t1c.number_input("L1 n", 0, value=def_t, key=f"t1_{zone}")
+                t_d1_name = t1s.selectbox("L1 size", list(bar_opts.keys()), index=3, key=f"td1_{zone}")
+                t2c, t2s  = st.columns(2)
+                t_n2      = t2c.number_input("L2 n", 0, value=0, key=f"t2_{zone}")
+                t_d2_name = t2s.selectbox("L2 size", list(bar_opts.keys()), index=2, key=f"td2_{zone}")
+                t3c, t3s  = st.columns(2)
+                t_n3      = t3c.number_input("L3 n", 0, value=0, key=f"t3_{zone}")
+                t_d3_name = t3s.selectbox("L3 size", list(bar_opts.keys()), index=2, key=f"td3_{zone}")
+
+            with c2z:
+                st.write("**Bottom Bars**")
+                b1c, b1s = st.columns(2)
+                b_n1      = b1c.number_input("L1 n", 0, value=def_b, key=f"b1_{zone}")
+                b_d1_name = b1s.selectbox("L1 size", list(bar_opts.keys()), index=3, key=f"bd1_{zone}")
+                b2c, b2s  = st.columns(2)
+                b_n2      = b2c.number_input("L2 n", 0, value=0, key=f"b2_{zone}")
+                b_d2_name = b2s.selectbox("L2 size", list(bar_opts.keys()), index=2, key=f"bd2_{zone}")
+                b3c, b3s  = st.columns(2)
+                b_n3      = b3c.number_input("L3 n", 0, value=0, key=f"b3_{zone}")
+                b_d3_name = b3s.selectbox("L3 size", list(bar_opts.keys()), index=2, key=f"bd3_{zone}")
+
+            t_d1, t_d2, t_d3 = bar_opts[t_d1_name], bar_opts[t_d2_name], bar_opts[t_d3_name]
+            b_d1, b_d2, b_d3 = bar_opts[b_d1_name], bar_opts[b_d2_name], bar_opts[b_d3_name]
+
+            rebar_data[zone] = {
+                'top': get_rebar_group(t_n1, t_d1, t_n2, t_d2, t_n3, t_d3, cover_clear, bar_v, clear_space),
+                'bot': get_rebar_group(b_n1, b_d1, b_n2, b_d2, b_n3, b_d3, cover_clear, bar_v, clear_space),
+            }
+            bar_selections[zone] = {
+                'top_d1': t_d1 if t_n1 > 0 else 0,
+                'bot_d1': b_d1 if b_n1 > 0 else 0,
+            }
+
+# ==========================================
+# RUN DESIGN
+# ==========================================
+
+st.markdown("---")
+if st.button("🚀 Run Full 3-Zone Detailing Design", type="primary", use_container_width=True):
+
+    # Save envelope figure for PDF
+    if fig_env is not None:
+        tmp_env = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        fig_env.savefig(tmp_env.name, bbox_inches='tight', dpi=150)
+        env_img_path = tmp_env.name
+    else:
+        env_img_path = None
+
+    cols = st.columns(3)
+    pdf_zone_data = {}
+
+    for idx, zone in enumerate(["Left", "Mid", "Right"]):
+        with cols[idx]:
+            st.subheader(f"{zone} Section")
+            top_rg = rebar_data[zone]['top']
+            bot_rg = rebar_data[zone]['bot']
+
+            # Bar fit check
+            if top_rg.width_req > b or bot_rg.width_req > b:
+                st.error(f"🚨 Bars don't fit in {b} mm width. "
+                         f"Top needs {round(top_rg.width_req,1)} mm, "
+                         f"Bot needs {round(bot_rg.width_req,1)} mm.")
+                pdf_zone_data[zone] = None
+                continue
+
+            # Effective depths
+            if zone == "Mid":
+                As_tens, As_comp = bot_rg.area, top_rg.area
+                d       = h - bot_rg.centroid
+                dt      = h - bot_rg.extreme_fiber
+                d_prime = top_rg.centroid
+            else:
+                As_tens, As_comp = top_rg.area, bot_rg.area
+                d       = h - top_rg.centroid
+                dt      = h - top_rg.extreme_fiber
+                d_prime = bot_rg.centroid
+
+            Mu = abs(forces[zone]['M'])
+
+            # ---- FLEXURE ----
+            res_flex = calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As_tens, As_comp)
+            DC_flex  = round(Mu / res_flex['phi_Mn'], 2) if res_flex['phi_Mn'] > 0 else 999.9
+
+            st.write(f"**Flexure:** φMn = {res_flex['phi_Mn']} kNm "
+                     f"(Req: {round(Mu,1)}) | **D/C: {DC_flex}**")
+            if not res_flex['converged']:
+                st.error("🚨 Solver convergence failed.")
+            elif not res_flex['passes_As_min']:
+                st.warning(f"⚠️ As < As,min ({res_flex['As_min']} mm²)")
+            elif not res_flex['is_ductile']:
+                st.error("❌ Over-reinforced — compression-controlled.")
+            elif res_flex['phi_Mn'] >= Mu:
+                st.success("✅ Flexure OK")
+            else:
+                st.error("❌ Flexure fails")
+
+            # ---- SHEAR ----
+            if use_sap and df is not None and beam_length > 0 and zone in ["Left", "Right"]:
+                d_m = d / 1000.0
+                valid = df[(df['Station'] >= d_m) & (df['Station'] <= (beam_length - d_m))]
+                if not valid.empty:
+                    if zone == "Left":
+                        sub = valid[valid['Station'] <= 0.3 * beam_length]
+                    else:
+                        sub = valid[valid['Station'] >= 0.7 * beam_length]
+                    idx_v = sub['V2_abs'].idxmax() if not sub.empty else valid['V2_abs'].idxmax()
+                    Vu_design   = valid.loc[idx_v, 'V2_abs']
+                    combo_label = f"{valid.loc[idx_v,'OutputCase']} @ {round(valid.loc[idx_v,'Station'],2)}m"
+                else:
+                    Vu_design   = max_V2_raw
+                    combo_label = combo_V2
+            else:
+                Vu_design   = forces[zone]['V']
+                combo_label = "Manual input"
+
+            res_shear = calculate_shear_torsion(
+                b, h, d, fc, fyt, fy, cover_clear,
+                Vu_design, forces[zone]['T'],
+                n_legs, bar_v, lambda_c
+            )
+            phi_Vn  = res_shear['phi_Vn']
+            DC_shear = round(Vu_design / phi_Vn, 2) if phi_Vn > 0 else 999.9
+
+            st.write(f"**Shear:** Vu = {round(Vu_design,1)} kN ({combo_label})")
+            if res_shear['final_s'] > 0:
+                st.success(
+                    f"✅ {n_legs}-DB{bar_v} @ {res_shear['final_s']} mm  "
+                    f"| φVn = {phi_Vn} kN (D/C: {DC_shear})"
+                )
+                if res_shear['needs_torsion']:
+                    st.info(f"Torsion governs — add Al = {res_shear['Al_req']} mm² (min {res_shear['Al_min']} mm²)")
+            elif res_shear['section_fails']:
+                st.error("❌ Section too small — web crushing limit exceeded.")
+            else:
+                st.error("❌ Spacing too tight (< 50 mm). Increase stirrup size or legs.")
+
+            # ---- DEVELOPMENT LENGTHS ----
+            dev_top = calculate_development_length(
+                bar_selections[zone]['top_d1'], fy, fc, True, cover_clear, clear_space, lambda_c)
+            dev_bot = calculate_development_length(
+                bar_selections[zone]['bot_d1'], fy, fc, False, cover_clear, clear_space, lambda_c)
+
+            st.write("**Development lengths:**")
+            if zone in ["Left", "Right"]:
+                st.write(f"- Top hook (ldh): **{dev_top['ldh']}** mm")
+                st.write(f"- Top lap splice: **{dev_top['lap']}** mm")
+            else:
+                st.write(f"- Bottom lap splice: **{dev_bot['lap']}** mm")
+
+            # ---- EXPANDER: full calc steps ----
+            with st.expander("🧮 Calculation steps"):
+                st.markdown(f"""
+**1. Flexural strain compatibility**
+- d = {round(d,1)} mm, dt = {round(dt,1)} mm, d' = {round(d_prime,1)} mm
+- Neutral axis c = **{res_flex['c']}** mm
+- εt = **{res_flex['eps_t']}** → φ = {res_flex['phi']}
+- Mn = **{res_flex['Mn']}** kNm → φMn = **{res_flex['phi_Mn']}** kNm
+
+**2. Shear & torsion**
+- λs = {res_shear['lambda_s']} (size effect, ACI §22.5.5.1.3)
+- φVc = **{res_shear['phi_Vc']}** kN
+- φVn = **{res_shear['phi_Vn']}** kN
+- s_req = {res_shear['s_exact']} mm → s_max = {res_shear['s_max']} mm → **use {res_shear['final_s']} mm**
+- Combined stress = {res_shear['combined_stress']} MPa  (limit {res_shear['stress_limit']} MPa)
+                """)
+
+            pdf_zone_data[zone] = {
+                'Mu': round(Mu, 1), 'phi_Mn': res_flex['phi_Mn'], 'DC_flex': DC_flex,
+                'Vu': round(Vu_design, 1), 'DC_shear': DC_shear,
+                'stirrups': (f"{n_legs}-DB{bar_v} @ {res_shear['final_s']} mm (D/C: {DC_shear})"
+                             if res_shear['final_s'] > 0 else "FAILS"),
+                'dev_top': dev_top['ldh'], 'dev_top_lap': dev_top['lap'], 'dev_bot': dev_bot['lap']
+            }
+
+    # ---- PDF EXPORT ----
+    if any(v is not None for v in pdf_zone_data.values()):
+        st.markdown("---")
+        input_label = "SAP2000 CSV" if use_sap else "Manual Input"
+        pdf_bytes = create_pdf_report(
+            b, h, fc, fy, fyt, selected_frame,
+            env_img_path, pdf_zone_data, input_label
+        )
+        st.download_button(
+            label="📄 Download PDF Calculation Report",
+            data=pdf_bytes,
+            file_name=f"Beam_{selected_frame}_Report.pdf",
+            mime="application/pdf",
+            type="primary"
+        )
