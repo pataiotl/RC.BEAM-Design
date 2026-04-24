@@ -49,13 +49,13 @@ div[data-testid="metric-container"] {
 }
 div[data-testid="metric-container"] label,
 div[data-testid="metric-container"] [data-testid="stMetricLabel"] {
-    font-size: 7px !important;
+    font-size: 5.25px !important;
 }
 div[data-testid="metric-container"] [data-testid="stMetricValue"] {
-    font-size: 16px !important;
+    font-size: 12px !important;
 }
 div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
-    font-size: 7px !important;
+    font-size: 5.25px !important;
 }
 .app-hero {
     border: 1px solid var(--border);
@@ -87,25 +87,33 @@ div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
 .status-warn { color: var(--warn); background: #2a1f00; border-color: #92400e; }
 .check-row {
     display: grid;
-    grid-template-columns: 112px 1fr 54px;
-    gap: 6px;
+    grid-template-columns: 34% minmax(0, 1fr) 62px;
+    gap: 8px;
     align-items: center;
     background: rgba(24,28,36,.95);
     border: 1px solid var(--border);
     border-radius: 7px;
-    padding: 6px 7px;
-    margin-bottom: 4px;
-    font-size: 8.5px;
+    padding: 8px 9px;
+    margin-bottom: 5px;
+    font-size: 14px;
 }
 .check-label { font-weight: 800; color: var(--text); }
-.check-detail { color: var(--muted); font-family: monospace; font-size: 7.5px; }
+.check-detail {
+    color: var(--muted);
+    font-family: monospace;
+    font-size: 12px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
 .badge {
     text-align: center;
     border-radius: 5px;
-    padding: 3px 5px;
+    padding: 4px 6px;
     font-family: monospace;
     font-weight: 800;
-    font-size: 7.5px;
+    font-size: 11px;
+    justify-self: end;
+    min-width: 48px;
 }
 .badge-pass { color: var(--pass); background: #052a14; border: 1px solid #166534; }
 .badge-fail { color: var(--fail); background: #2a0a0a; border: 1px solid #991b1b; }
@@ -412,7 +420,7 @@ def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone, s
 
     pad = max(b, h) * 0.18
     ax.set_xlim(-pad, b + pad * 1.65)
-    ax.set_ylim(h + pad * 0.6, -pad)
+    ax.set_ylim(h + pad * 0.78, -pad)
 
     ax.add_patch(patches.Rectangle((0, 0), b, h, facecolor="#1e2330", edgecolor="#4f8ef7", lw=1.2))
     ax.add_patch(
@@ -473,11 +481,12 @@ def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone, s
                 ax.add_patch(patches.Circle((x, y), max(skin_bar_dia / 2, 3.5), facecolor="#38bdf8", edgecolor="#164e63", lw=0.45))
 
     ax.annotate("", xy=(0, h + pad * 0.25), xytext=(b, h + pad * 0.25), arrowprops=dict(arrowstyle="<->", color="#7a84a0", lw=0.55))
-    ax.text(b / 2, h + pad * 0.38, f"b={b:.0f}", color="#e8eaf0", ha="center", fontsize=4.8)
+    ax.text(b / 2, h + pad * 0.34, f"b={b:.0f}", color="#e8eaf0", ha="center", fontsize=4.6)
     ax.annotate("", xy=(b + pad * 0.55, 0), xytext=(b + pad * 0.55, h), arrowprops=dict(arrowstyle="<->", color="#7a84a0", lw=0.55))
     ax.text(b + pad * 0.66, h / 2, f"h={h:.0f}", color="#e8eaf0", va="center", fontsize=4.8)
     ax.text(0, -pad * 0.18, f"{zone}", color="#98a2b8", fontsize=5.4, weight="bold")
-    ax.text(0, h + pad * 0.55, f"Aoh={shear.get('Aoh', 0):.0f} ph={shear.get('ph', 0):.0f}", color="#c084fc", fontsize=4.8)
+    ax.text(0, h + pad * 0.58, f"Aoh={shear.get('Aoh', 0):.0f}", color="#c084fc", fontsize=4.2, ha="left")
+    ax.text(b, h + pad * 0.58, f"ph={shear.get('ph', 0):.0f}", color="#c084fc", fontsize=4.2, ha="right")
     return fig
 
 
