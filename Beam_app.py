@@ -8,6 +8,21 @@ from dataclasses import dataclass
 from fpdf import FPDF
 
 st.set_page_config(layout="wide")
+st.markdown("""
+<style>
+div[data-testid="metric-container"] {
+    border: 1px solid #d9d9d9;
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: #fafafa;
+}
+.zone-header {
+    font-weight: 700;
+    font-size: 1.05rem;
+    margin-bottom: 0.25rem;
+}
+</style>
+""", unsafe_allow_html=True)
 
 
 # ==========================================
@@ -66,12 +81,15 @@ def get_rebar_group(n1, dia1, n2, dia2, n3, dia3, cover_clear, tie_dia, clear_sp
 def calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As, As_prime):
     if As == 0:
         return {'phi_Mn': 0, 'passes_As_min': False, 'is_ductile': False, 'converged': True,
-                'As_min': 0, 'c': 0, 'a': 0, 'eps_t': 0, 'phi': 0, 'Mn': 0}
+                'As_min': 0, 'As_max_tc': 0, 'passes_As_max_tc': False, 'strain_class': "N/A",
+                'c': 0, 'a': 0, 'eps_t': 0, 'phi': 0, 'Mn': 0}
     Es = 200000
     ecu = 0.003
     eps_y = fy / Es
     beta1 = 0.85 if fc <= 28 else max(0.65, 0.85 - 0.05 * ((fc - 28) / 7))
     As_min = max((0.25 * math.sqrt(fc) / fy) * b * d, (1.4 / fy) * b * d)
+    rho_max_tc = 0.85 * beta1 * (fc / fy) * (ecu / (ecu + 0.005))
+    As_max_tc = rho_max_tc * b * d
 
     c = d
     converged = False
@@ -97,14 +115,19 @@ def calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As, As_prime):
 
     if eps_t <= eps_y:
         phi = 0.65
+        strain_class = "Compression-controlled"
     elif eps_t >= (eps_y + 0.003):
         phi = 0.90
+        strain_class = "Tension-controlled"
     else:
         phi = 0.65 + 0.25 * ((eps_t - eps_y) / 0.003)
+        strain_class = "Transition zone"
 
     return {
-        'phi_Mn': round(phi * Mn_kNm, 1), 'is_ductile': eps_t >= 0.004,
+        'phi_Mn': round(phi * Mn_kNm, 1), 'is_ductile': eps_t >= 0.005,
         'As_min': round(As_min, 1), 'passes_As_min': As >= As_min,
+        'As_max_tc': round(As_max_tc, 1), 'passes_As_max_tc': As <= As_max_tc,
+        'strain_class': strain_class,
         'converged': converged, 'c': round(c, 2), 'a': round(a, 2),
         'eps_t': round(eps_t, 5), 'phi': round(phi, 3), 'Mn': round(Mn_kNm, 1)
     }
@@ -265,6 +288,11 @@ def create_pdf_report(b, h, fc, fy, fyt, frame_name, env_img_path, zone_data, in
 
 st.title("🏗️ RC Beam Designer — ACI 318-19")
 st.caption("3-zone design: Left Support (i) · Midspan · Right Support (j)")
+st.info(
+    "Professional preliminary design tool aligned with ACI 318-19 strength design checks "
+    "(flexure, shear-torsion, and development length). Engineer review is required for final detailing.",
+    icon="📐"
+)
 
 # ---- INPUT MODE TOGGLE ----
 st.markdown("### Force Input Source")
@@ -472,6 +500,7 @@ else:
 # ==========================================
 
 st.markdown("---")
+st.subheader("Project Input Workspace")
 col_prop, col_rebar = st.columns([1, 2])
 
 with col_prop:
@@ -562,7 +591,7 @@ if st.button("🚀 Run Full 3-Zone Detailing Design", type="primary", use_contai
 
     for idx, zone in enumerate(["Left", "Mid", "Right"]):
         with cols[idx]:
-            st.subheader(f"{zone} Section")
+            st.markdown(f"<div class='zone-header'>{zone} Section</div>", unsafe_allow_html=True)
             top_rg = rebar_data[zone]['top']
             bot_rg = rebar_data[zone]['bot']
 
@@ -598,6 +627,11 @@ if st.button("🚀 Run Full 3-Zone Detailing Design", type="primary", use_contai
                 st.error("🚨 Solver convergence failed.")
             elif not res_flex['passes_As_min']:
                 st.warning(f"⚠️ As < As,min ({res_flex['As_min']} mm²)")
+            elif not res_flex['passes_As_max_tc']:
+                st.warning(
+                    f"⚠️ As exceeds tension-controlled guide limit As,max(tc) = {res_flex['As_max_tc']} mm² "
+                    "(ACI 318-19 strain compatibility check)."
+                )
             elif not res_flex['is_ductile']:
                 st.error("❌ Over-reinforced — compression-controlled.")
             elif res_flex['phi_Mn'] >= Mu:
@@ -664,8 +698,9 @@ if st.button("🚀 Run Full 3-Zone Detailing Design", type="primary", use_contai
 **1. Flexural strain compatibility**
 - d = {round(d,1)} mm, dt = {round(dt,1)} mm, d' = {round(d_prime,1)} mm
 - Neutral axis c = **{res_flex['c']}** mm
-- εt = **{res_flex['eps_t']}** → φ = {res_flex['phi']}
+- εt = **{res_flex['eps_t']}** → φ = {res_flex['phi']}  ({res_flex['strain_class']})
 - Mn = **{res_flex['Mn']}** kNm → φMn = **{res_flex['phi_Mn']}** kNm
+- As,min = {res_flex['As_min']} mm² | As,max(tc) = {res_flex['As_max_tc']} mm²
 
 **2. Shear & torsion**
 - λs = {res_shear['lambda_s']} (size effect, ACI §22.5.5.1.3)
@@ -682,6 +717,23 @@ if st.button("🚀 Run Full 3-Zone Detailing Design", type="primary", use_contai
                              if res_shear['final_s'] > 0 else "FAILS"),
                 'dev_top': dev_top['ldh'], 'dev_top_lap': dev_top['lap'], 'dev_bot': dev_bot['lap']
             }
+
+    st.markdown("### Design Summary Table")
+    summary_rows = []
+    for zone in ["Left", "Mid", "Right"]:
+        z = pdf_zone_data.get(zone)
+        if not z:
+            continue
+        summary_rows.append({
+            "Zone": zone,
+            "Mu (kNm)": z['Mu'],
+            "φMn (kNm)": z['phi_Mn'],
+            "Flexure D/C": z['DC_flex'],
+            "Vu (kN)": z['Vu'],
+            "Stirrups": z['stirrups'],
+        })
+    if summary_rows:
+        st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
     # ---- PDF EXPORT ----
     if any(v is not None for v in pdf_zone_data.values()):
