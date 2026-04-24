@@ -618,9 +618,41 @@ def create_pdf_report(b, h, fc, fy, fyt, frame_name, zone_data, input_mode):
         pdf.set_font("Arial", "B", 9)
         pdf.cell(17, 5, f"{zone}:", border=0)
         pdf.set_font("Arial", "", 9)
-        pdf.cell(0, 5, f"Mu {data['Mu']} kNm | phiMn {data['phi_Mn']} kNm | Vu {data['Vu']} kN | {data['stirrups']}", ln=True)
+        pdf.cell(
+            0,
+            5,
+            f"Mu {data['Mu']} kNm ({data['M_combo']}) | phiMn {data['phi_Mn']} kNm | Flex D/C {data['DC_flex']}",
+            ln=True,
+        )
         pdf.cell(17, 5, "", border=0)
-        pdf.cell(0, 5, f"Top hook {data['dev_top']} mm | Top lap {data['dev_top_lap']} mm | Bottom lap {data['dev_bot']} mm", ln=True)
+        pdf.cell(
+            0,
+            5,
+            f"Vu {data['Vu']} kN ({data['V_combo']}) | phiVn {data['phi_Vn']} kN | Shear D/C {data['DC_shear']} | {data['stirrups']}",
+            ln=True,
+        )
+        pdf.cell(17, 5, "", border=0)
+        pdf.cell(
+            0,
+            5,
+            f"Tu {data['Tu']} kNm ({data['T_combo']}) | Torsion: {data['torsion_status']} | Al req {data['Al_req']} mm2 | Skin Al {data['skin_Al']} mm2",
+            ln=True,
+        )
+        pdf.cell(17, 5, "", border=0)
+        pdf.cell(
+            0,
+            5,
+            f"Strain {data['eps_t']} | phi {data['phi']} | {data['strain_class']} | Skin bars: {data['skin_detail']}",
+            ln=True,
+        )
+        pdf.cell(17, 5, "", border=0)
+        pdf.cell(
+            0,
+            5,
+            f"Top hook {data['dev_top']} mm | Top lap {data['dev_top_lap']} mm | Bottom lap {data['dev_bot']} mm",
+            ln=True,
+        )
+        pdf.ln(1)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         pdf.output(tmp_pdf.name)
         with open(tmp_pdf.name, "rb") as f:
@@ -646,9 +678,25 @@ input_mode = st.radio("Force input source", ["Manual Input", "SAP2000 CSV Upload
 use_sap = input_mode == "SAP2000 CSV Upload"
 
 forces = {"Left": {"M": 0.0, "V": 0.0, "T": 0.0}, "Mid": {"M": 0.0, "V": 0.0, "T": 0.0}, "Right": {"M": 0.0, "V": 0.0, "T": 0.0}}
+force_meta = {
+    zone: {kind: "Manual input" for kind in ["M", "V", "T"]}
+    for zone in ["Left", "Mid", "Right"]
+}
 beam_length = 6.0
 selected_frame = "Manual"
 df = None
+
+
+def governing_value_and_combo(data, value_col, abs_col=None):
+    if data is None or data.empty or value_col not in data.columns:
+        return 0.0, "No data"
+    target_col = abs_col or value_col
+    idx = data[target_col].abs().idxmax() if target_col == value_col else data[target_col].idxmax()
+    value = abs(float(data.loc[idx, value_col]))
+    combo = str(data.loc[idx, "OutputCase"]) if "OutputCase" in data.columns else "Manual"
+    station = data.loc[idx, "Station"] if "Station" in data.columns else None
+    combo_label = f"{combo} @ {station:.2f}m" if station is not None and pd.notna(station) else combo
+    return value, combo_label
 
 if use_sap:
     uploaded_file = st.file_uploader("Upload SAP2000 frame-forces CSV", type=["csv"])
@@ -672,15 +720,11 @@ if use_sap:
             df_left = df[df["Station"] <= 0.1 * beam_length]
             df_right = df[df["Station"] >= 0.9 * beam_length]
             df_mid = df[(df["Station"] > 0.3 * beam_length) & (df["Station"] < 0.7 * beam_length)]
-            forces["Left"]["M"] = df_left["M3"].abs().max() if not df_left.empty else 0
-            forces["Left"]["V"] = df_left["V2_abs"].max() if not df_left.empty else 0
-            forces["Left"]["T"] = df_left["T_abs"].max() if not df_left.empty else 0
-            forces["Right"]["M"] = df_right["M3"].abs().max() if not df_right.empty else 0
-            forces["Right"]["V"] = df_right["V2_abs"].max() if not df_right.empty else 0
-            forces["Right"]["T"] = df_right["T_abs"].max() if not df_right.empty else 0
-            forces["Mid"]["M"] = df_mid["M3"].abs().max() if not df_mid.empty else df["M3"].abs().max()
-            forces["Mid"]["V"] = df_mid["V2_abs"].max() if not df_mid.empty else 0
-            forces["Mid"]["T"] = df_mid["T_abs"].max() if not df_mid.empty else 0
+            zone_frames = {"Left": df_left, "Mid": df_mid if not df_mid.empty else df, "Right": df_right}
+            for z, zdf in zone_frames.items():
+                forces[z]["M"], force_meta[z]["M"] = governing_value_and_combo(zdf, "M3")
+                forces[z]["V"], force_meta[z]["V"] = governing_value_and_combo(zdf, "V2", "V2_abs")
+                forces[z]["T"], force_meta[z]["T"] = governing_value_and_combo(zdf, "T", "T_abs")
             st.info(f"Beam {selected_frame}, L = {beam_length:.2f} m. ACI deflection h_min note: about {beam_length * 1000 / 18.5:.1f} mm for one-end-continuous.")
     else:
         st.info("Upload a SAP2000 CSV file to begin.")
@@ -816,8 +860,12 @@ if st.session_state.get("design_results_visible", False):
 
             Mu = abs(forces[zone]["M"])
             Vu_design = abs(forces[zone]["V"])
+            Tu_design = abs(forces[zone]["T"])
+            m_combo = force_meta[zone]["M"]
+            v_combo = force_meta[zone]["V"]
+            t_combo = force_meta[zone]["T"]
             res_flex = calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As_tens, As_comp)
-            res_shear = calculate_shear_torsion(b, h, d, fc, fyt, fy, cover_clear, Vu_design, forces[zone]["T"], n_legs, bar_v, lambda_c)
+            res_shear = calculate_shear_torsion(b, h, d, fc, fyt, fy, cover_clear, Vu_design, Tu_design, n_legs, bar_v, lambda_c)
             skin = calculate_skin_reinforcement(h, d, skin_bar_dia, skin_bar_qty, skin_layers)
             dev_top = calculate_development_length(bar_selections[zone]["top_d1"], fy, fc, True, cover_clear, clear_space, lambda_c)
             dev_bot = calculate_development_length(bar_selections[zone]["bot_d1"], fy, fc, False, cover_clear, clear_space, lambda_c)
@@ -835,9 +883,9 @@ if st.session_state.get("design_results_visible", False):
 
             m1, m2, m3, m4 = st.columns(4)
             with m1:
-                mini_metric("phi Mn", f"{res_flex['phi_Mn']} kNm", f"D/C {dc_flex}")
+                mini_metric("phi Mn", f"{res_flex['phi_Mn']} kNm", f"{m_combo} | D/C {dc_flex}")
             with m2:
-                mini_metric("phi Vn", f"{res_shear['phi_Vn']} kN", f"D/C {dc_shear}")
+                mini_metric("phi Vn", f"{res_shear['phi_Vn']} kN", f"{v_combo} | D/C {dc_shear}")
             with m3:
                 mini_metric("Stirrups", f"{n_legs}-{bar_v_name}", f"@ {res_shear['final_s']} mm" if res_shear["final_s"] else "FAIL")
             with m4:
@@ -850,12 +898,12 @@ if st.session_state.get("design_results_visible", False):
             plt.close(fig)
 
             st.markdown("<div class='section-band'>ACI Style Checks</div>", unsafe_allow_html=True)
-            check_row("Flexure phiMn >= Mu", res_flex["phi_Mn"] >= Mu, f"{res_flex['phi_Mn']} >= {Mu:.1f} kNm")
+            check_row("Flexure phiMn >= Mu", res_flex["phi_Mn"] >= Mu, f"{m_combo}; {res_flex['phi_Mn']} >= {Mu:.1f} kNm")
             check_row("Minimum As", res_flex["passes_As_min"], f"As = {As_tens:.1f}; As,min = {res_flex['As_min']} mm2")
             check_row("Tension-controlled", res_flex["is_ductile"], f"eps_t = {res_flex['eps_t']}; phi = {res_flex['phi']}", warn=not res_flex["is_ductile"] and res_flex["phi_Mn"] >= Mu)
-            check_row("Shear phiVn >= Vu", res_shear["phi_Vn"] >= Vu_design, f"{res_shear['phi_Vn']} >= {Vu_design:.1f} kN")
+            check_row("Shear phiVn >= Vu", res_shear["phi_Vn"] >= Vu_design, f"{v_combo}; {res_shear['phi_Vn']} >= {Vu_design:.1f} kN")
             check_row("Transverse spacing", res_shear["final_s"] > 0, f"s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm")
-            check_row("Torsion threshold", not res_shear["needs_torsion"], f"Tu = {forces[zone]['T']:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"])
+            check_row("Torsion threshold", not res_shear["needs_torsion"], f"{t_combo}; Tu = {Tu_design:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"])
             skin_detail = (
                 f"{skin['layers']} layer(s) of {skin['bars_per_layer']}-{skin_bar_name}; h = {h:.0f} mm <= 900 mm, not required"
                 if not skin["required"]
@@ -879,6 +927,9 @@ if st.session_state.get("design_results_visible", False):
                         [
                             ("d", f"{d:.1f} mm", "Effective depth"),
                             ("d'", f"{d_prime:.1f} mm", "Compression steel depth"),
+                            ("Governing Mu combo", m_combo, f"Mu = {Mu:.1f} kNm"),
+                            ("Governing Vu combo", v_combo, f"Vu = {Vu_design:.1f} kN"),
+                            ("Governing Tu combo", t_combo, f"Tu = {Tu_design:.1f} kNm"),
                             ("c / a", f"{res_flex['c']} / {res_flex['a']} mm", "Neutral axis and stress block"),
                             ("Mn / phiMn", f"{res_flex['Mn']} / {res_flex['phi_Mn']} kNm", "Nominal and design moment"),
                             ("lambda_s", res_shear["lambda_s"], "ACI size effect factor"),
@@ -897,11 +948,23 @@ if st.session_state.get("design_results_visible", False):
             stirrup_text = f"{n_legs}-DB{bar_v} @ {res_shear['final_s']} mm (D/C: {dc_shear})" if res_shear["final_s"] > 0 else "FAILS"
             pdf_zone_data[zone] = {
                 "Mu": round(Mu, 1),
+                "M_combo": m_combo,
                 "phi_Mn": res_flex["phi_Mn"],
                 "DC_flex": dc_flex,
                 "Vu": round(Vu_design, 1),
+                "V_combo": v_combo,
+                "Tu": round(Tu_design, 1),
+                "T_combo": t_combo,
                 "DC_shear": dc_shear,
+                "phi_Vn": res_shear["phi_Vn"],
                 "stirrups": stirrup_text,
+                "torsion_status": "Required" if res_shear["needs_torsion"] else "Below threshold",
+                "Al_req": res_shear["Al_req"],
+                "skin_Al": skin["area_total"],
+                "skin_detail": skin_detail,
+                "eps_t": res_flex["eps_t"],
+                "phi": res_flex["phi"],
+                "strain_class": res_flex["strain_class"],
                 "dev_top": dev_top["ldh"],
                 "dev_top_lap": dev_top["lap"],
                 "dev_bot": dev_bot["lap"],
@@ -910,9 +973,11 @@ if st.session_state.get("design_results_visible", False):
                 {
                     "Zone": zone,
                     "Mu (kNm)": round(Mu, 1),
+                    "M Combo": m_combo,
                     "phiMn (kNm)": res_flex["phi_Mn"],
                     "Flexure D/C": dc_flex,
                     "Vu (kN)": round(Vu_design, 1),
+                    "V Combo": v_combo,
                     "phiVn (kN)": res_shear["phi_Vn"],
                     "Stirrups": stirrup_text,
                     "Strain class": res_flex["strain_class"],
