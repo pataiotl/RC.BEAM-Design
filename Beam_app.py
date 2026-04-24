@@ -639,7 +639,7 @@ if st.button("Run full 3-zone detailing design", type="primary", use_container_w
                 check_row("Torsion threshold", not res_shear["needs_torsion"], f"Tu = {forces[zone]['T']:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"])
 
             with st.expander("Calculation summary"):
-                st.write(
+                st.dataframe(
                     pd.DataFrame(
                         [
                             ("d", f"{d:.1f} mm", "Effective depth"),
