@@ -422,6 +422,56 @@ def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone):
     return fig
 
 
+def draw_force_diagrams(forces, beam_length, df=None, selected_frame="Manual"):
+    fig, (ax_m, ax_v) = plt.subplots(2, 1, figsize=(10.5, 4.2), dpi=150, sharex=True)
+    fig.patch.set_facecolor("#0f1117")
+    for ax in (ax_m, ax_v):
+        ax.set_facecolor("#181c24")
+        ax.grid(True, color="#364060", alpha=0.45, linestyle="--", linewidth=0.6)
+        ax.axhline(0, color="#e8eaf0", linewidth=0.8, alpha=0.75)
+        ax.tick_params(colors="#98a2b8", labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_color("#2a3044")
+
+    if df is not None and not df.empty and {"Station", "M3", "V2"}.issubset(df.columns):
+        df_env = (
+            df.groupby("Station")
+            .agg(M3_Max=("M3", "max"), M3_Min=("M3", "min"), V2_Max=("V2", "max"), V2_Min=("V2", "min"))
+            .reset_index()
+            .sort_values("Station")
+        )
+        x = df_env["Station"]
+        ax_m.plot(x, df_env["M3_Max"], color="#4f8ef7", linewidth=1.6, label="+M")
+        ax_m.plot(x, df_env["M3_Min"], color="#f87171", linewidth=1.6, label="-M")
+        ax_m.fill_between(x, df_env["M3_Min"], df_env["M3_Max"], color="#7a84a0", alpha=0.18)
+        ax_v.plot(x, df_env["V2_Max"], color="#22c55e", linewidth=1.6, label="+V")
+        ax_v.plot(x, df_env["V2_Min"], color="#fbbf24", linewidth=1.6, label="-V")
+        ax_v.fill_between(x, df_env["V2_Min"], df_env["V2_Max"], color="#22c55e", alpha=0.12)
+        title = f"Frame {selected_frame} - SAP2000 Envelope"
+    else:
+        L = max(float(beam_length or 0), 1.0)
+        x = [0, 0.5 * L, L]
+        m = [-abs(forces["Left"]["M"]), abs(forces["Mid"]["M"]), -abs(forces["Right"]["M"])]
+        v = [abs(forces["Left"]["V"]), 0, -abs(forces["Right"]["V"])]
+        ax_m.plot(x, m, color="#4f8ef7", linewidth=1.8, marker="o", label="M demand")
+        ax_m.fill_between(x, m, 0, color="#4f8ef7", alpha=0.13)
+        ax_v.plot(x, v, color="#22c55e", linewidth=1.8, marker="o", label="V demand")
+        ax_v.fill_between(x, v, 0, color="#22c55e", alpha=0.13)
+        ax_m.annotate(f"i -{abs(forces['Left']['M']):.1f}", (x[0], m[0]), color="#f87171", fontsize=8, xytext=(5, -14), textcoords="offset points")
+        ax_m.annotate(f"mid +{abs(forces['Mid']['M']):.1f}", (x[1], m[1]), color="#4f8ef7", fontsize=8, xytext=(5, 8), textcoords="offset points")
+        ax_m.annotate(f"j -{abs(forces['Right']['M']):.1f}", (x[2], m[2]), color="#f87171", fontsize=8, xytext=(-52, -14), textcoords="offset points")
+        title = "Manual Design Demands"
+
+    ax_m.set_title(title, color="#e8eaf0", fontsize=11, fontweight="bold", pad=8)
+    ax_m.set_ylabel("M (kNm)", color="#98a2b8", fontsize=9)
+    ax_v.set_ylabel("V (kN)", color="#98a2b8", fontsize=9)
+    ax_v.set_xlabel("Station (m)", color="#98a2b8", fontsize=9)
+    ax_m.legend(facecolor="#181c24", edgecolor="#2a3044", labelcolor="#e8eaf0", fontsize=8, loc="best")
+    ax_v.legend(facecolor="#181c24", edgecolor="#2a3044", labelcolor="#e8eaf0", fontsize=8, loc="best")
+    plt.tight_layout()
+    return fig
+
+
 def create_pdf_report(b, h, fc, fy, fyt, frame_name, zone_data, input_mode):
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.add_page()
@@ -520,6 +570,11 @@ else:
             forces[zone]["V"] = st.number_input(f"Vu {zone} (kN)", value=defaults[zone][1], step=5.0, min_value=0.0)
             forces[zone]["T"] = st.number_input(f"Tu {zone} (kNm)", value=defaults[zone][2], step=1.0, min_value=0.0)
 
+st.markdown("<div class='section-band'>Bending and Shear Diagram</div>", unsafe_allow_html=True)
+force_fig = draw_force_diagrams(forces, beam_length, df=df, selected_frame=selected_frame)
+st.pyplot(force_fig, use_container_width=True)
+plt.close(force_fig)
+
 st.markdown("<div class='section-band'>Project Input Workspace</div>", unsafe_allow_html=True)
 col_prop, col_rebar = st.columns([1, 2])
 
@@ -578,10 +633,12 @@ st.markdown("<div class='section-band'>Run Design</div>", unsafe_allow_html=True
 if st.button("Run full 3-zone detailing design", type="primary", use_container_width=True):
     pdf_zone_data = {}
     summary_rows = []
-    zone_tabs = st.tabs(["Left Results", "Mid Results", "Right Results"])
+    st.markdown("<div class='section-band'>Three-Zone Cross Sections and Calculations</div>", unsafe_allow_html=True)
 
     for idx, zone in enumerate(["Left", "Mid", "Right"]):
-        with zone_tabs[idx]:
+        with st.container(border=True):
+            zone_label = {"Left": "i - left support", "Mid": "midspan", "Right": "j - right support"}[zone]
+            st.subheader(f"{zone} Section ({zone_label})")
             top_rg = rebar_data[zone]["top"]
             bot_rg = rebar_data[zone]["bot"]
             if top_rg.width_req > b or bot_rg.width_req > b:
@@ -638,7 +695,8 @@ if st.button("Run full 3-zone detailing design", type="primary", use_container_w
                 check_row("Transverse spacing", res_shear["final_s"] > 0, f"s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm")
                 check_row("Torsion threshold", not res_shear["needs_torsion"], f"Tu = {forces[zone]['T']:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"])
 
-            with st.expander("Calculation summary"):
+            st.markdown("<div class='section-band'>Calculation Summary</div>", unsafe_allow_html=True)
+            if True:
                 st.dataframe(
                     pd.DataFrame(
                         [
