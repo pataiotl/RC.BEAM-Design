@@ -140,6 +140,35 @@ div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
     padding: 6px;
     background: rgba(15,17,23,.55);
 }
+.mini-metric {
+    padding: 2px 2px 5px;
+    min-height: 46px;
+}
+.mini-metric-label {
+    color: var(--text);
+    font-size: 5.5px;
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 3px;
+}
+.mini-metric-value {
+    color: white;
+    font-size: 12px;
+    line-height: 1.05;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.mini-metric-delta {
+    display: inline-block;
+    margin-top: 5px;
+    color: var(--pass);
+    background: #064e24;
+    border-radius: 999px;
+    padding: 2px 5px;
+    font-size: 5.5px;
+    font-weight: 800;
+    white-space: nowrap;
+}
 .notice {
     background: rgba(24,28,36,.95);
     border: 1px solid var(--border);
@@ -375,6 +404,19 @@ def status_card(kind, text):
     st.markdown(f"<div class='status-card status-{kind}'>{text}</div>", unsafe_allow_html=True)
 
 
+def mini_metric(label, value, delta):
+    st.markdown(
+        f"""
+<div class="mini-metric">
+  <div class="mini-metric-label">{label}</div>
+  <div class="mini-metric-value">{value}</div>
+  <div class="mini-metric-delta">↗ {delta}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def check_row(label, ok, detail, warn=False):
     cls = "badge-warn" if warn else ("badge-pass" if ok else "badge-fail")
     txt = "WARN" if warn else ("PASS" if ok else "FAIL")
@@ -390,22 +432,23 @@ def check_row(label, ok, detail, warn=False):
     )
 
 
-def calculate_skin_reinforcement(h, d, skin_bar_dia):
+def calculate_skin_reinforcement(h, d, skin_bar_dia, skin_bar_qty, skin_layers):
     required = h > 900
     s_limit = min(d / 6, 300) if d > 0 else 300
     zone_height = h / 2
-    if required:
-        bars_per_side = max(2, math.ceil(zone_height / s_limit) + 1)
-        spacing = zone_height / (bars_per_side - 1)
-    else:
-        bars_per_side = 0
-        spacing = 0
+    provided_layers = max(1, int(skin_layers))
+    spacing = zone_height / (provided_layers - 1) if provided_layers > 1 else zone_height
+    spacing_ok = (not required) or spacing <= s_limit
+    bars_per_side = max(0, int(skin_bar_qty)) * provided_layers
     area_per_side = bars_per_side * math.pi * skin_bar_dia**2 / 4
     return {
         "required": required,
         "s_limit": round(s_limit, 1),
         "bars_per_side": bars_per_side,
+        "bars_per_layer": max(0, int(skin_bar_qty)),
+        "layers": provided_layers,
         "spacing": round(spacing, 1),
+        "spacing_ok": spacing_ok,
         "area_per_side": round(area_per_side, 1),
         "zone_height": round(zone_height, 1),
     }
@@ -467,26 +510,28 @@ def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone, s
     for x, y in [(corner_offset, corner_offset), (b - corner_offset, corner_offset), (corner_offset, h - corner_offset), (b - corner_offset, h - corner_offset)]:
         ax.add_patch(patches.Circle((x, y), 5, facecolor="#c084fc", edgecolor="#5b21b6", lw=0.5))
 
-    if skin and skin["required"]:
+    if skin and skin["bars_per_side"] > 0:
         tension_top = zone in ["Left", "Right"]
         y_start = cover + tie_dia + skin_bar_dia / 2 if tension_top else h / 2
         y_end = h / 2 if tension_top else h - cover - tie_dia - skin_bar_dia / 2
-        if skin["bars_per_side"] == 1:
+        if skin["layers"] == 1:
             y_vals = [(y_start + y_end) / 2]
         else:
-            y_vals = [y_start + i * (y_end - y_start) / (skin["bars_per_side"] - 1) for i in range(skin["bars_per_side"])]
-        x_vals = [cover + tie_dia + skin_bar_dia / 2, b - cover - tie_dia - skin_bar_dia / 2]
+            y_vals = [y_start + i * (y_end - y_start) / (skin["layers"] - 1) for i in range(skin["layers"])]
+        left_base = cover + tie_dia + skin_bar_dia / 2
+        right_base = b - cover - tie_dia - skin_bar_dia / 2
+        x_offsets = [(i - (skin["bars_per_layer"] - 1) / 2) * (skin_bar_dia * 0.75) for i in range(skin["bars_per_layer"])]
         for y in y_vals:
-            for x in x_vals:
-                ax.add_patch(patches.Circle((x, y), max(skin_bar_dia / 2, 3.5), facecolor="#38bdf8", edgecolor="#164e63", lw=0.45))
+            for offset in x_offsets:
+                for base, sign in [(left_base, 1), (right_base, -1)]:
+                    x = base + sign * offset
+                    ax.add_patch(patches.Circle((x, y), max(skin_bar_dia / 2, 3.5), facecolor="#38bdf8", edgecolor="#164e63", lw=0.45))
 
     ax.annotate("", xy=(0, h + pad * 0.25), xytext=(b, h + pad * 0.25), arrowprops=dict(arrowstyle="<->", color="#7a84a0", lw=0.55))
     ax.text(b / 2, h + pad * 0.34, f"b={b:.0f}", color="#e8eaf0", ha="center", fontsize=4.6)
     ax.annotate("", xy=(b + pad * 0.55, 0), xytext=(b + pad * 0.55, h), arrowprops=dict(arrowstyle="<->", color="#7a84a0", lw=0.55))
     ax.text(b + pad * 0.66, h / 2, f"h={h:.0f}", color="#e8eaf0", va="center", fontsize=4.8)
     ax.text(0, -pad * 0.18, f"{zone}", color="#98a2b8", fontsize=5.4, weight="bold")
-    ax.text(0, h + pad * 0.58, f"Aoh={shear.get('Aoh', 0):.0f}", color="#c084fc", fontsize=4.2, ha="left")
-    ax.text(b, h + pad * 0.58, f"ph={shear.get('ph', 0):.0f}", color="#c084fc", fontsize=4.2, ha="right")
     return fig
 
 
@@ -673,11 +718,26 @@ with col_prop:
     clear_space = st.number_input("Minimum clear bar spacing (mm)", value=25, step=5, min_value=20)
     st.subheader("Skin Bars")
     skin_bar_options = {"DB10": 10, "DB12": 12, "DB16": 16, "DB20": 20}
-    skin_bar_name = st.selectbox(
-        "Side-face skin bar size",
+    skin_c1, skin_c2, skin_c3 = st.columns(3)
+    skin_bar_qty = skin_c1.number_input(
+        "Qty/layer each side",
+        min_value=0,
+        value=2,
+        step=1,
+        help="Example: 2 with DB12 means 2-DB12 at each skin-bar layer on each side face.",
+    )
+    skin_bar_name = skin_c2.selectbox(
+        "Skin bar size",
         list(skin_bar_options.keys()),
         index=1,
         help="ACI side-face longitudinal reinforcement is checked when overall beam depth exceeds 900 mm.",
+    )
+    skin_layers = skin_c3.number_input(
+        "Skin layers",
+        min_value=1,
+        value=2,
+        step=1,
+        help="Example: 2 layers of 2-DB12 side-face bars.",
     )
     skin_bar_dia = skin_bar_options[skin_bar_name]
 
@@ -754,7 +814,7 @@ if st.session_state.get("design_results_visible", False):
             Vu_design = abs(forces[zone]["V"])
             res_flex = calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As_tens, As_comp)
             res_shear = calculate_shear_torsion(b, h, d, fc, fyt, fy, cover_clear, Vu_design, forces[zone]["T"], n_legs, bar_v, lambda_c)
-            skin = calculate_skin_reinforcement(h, d, skin_bar_dia)
+            skin = calculate_skin_reinforcement(h, d, skin_bar_dia, skin_bar_qty, skin_layers)
             dev_top = calculate_development_length(bar_selections[zone]["top_d1"], fy, fc, True, cover_clear, clear_space, lambda_c)
             dev_bot = calculate_development_length(bar_selections[zone]["bot_d1"], fy, fc, False, cover_clear, clear_space, lambda_c)
             dc_flex = round(Mu / res_flex["phi_Mn"], 2) if res_flex["phi_Mn"] > 0 else 999.9
@@ -770,10 +830,14 @@ if st.session_state.get("design_results_visible", False):
                 status_card("fail", f"{zone} fails one or more required checks.")
 
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("phi Mn", f"{res_flex['phi_Mn']} kNm", f"D/C {dc_flex}")
-            m2.metric("phi Vn", f"{res_shear['phi_Vn']} kN", f"D/C {dc_shear}")
-            m3.metric("Stirrups", f"{n_legs}-{bar_v_name}", f"@ {res_shear['final_s']} mm" if res_shear["final_s"] else "FAIL")
-            m4.metric("Strain", f"{res_flex['eps_t']}", res_flex["strain_class"])
+            with m1:
+                mini_metric("phi Mn", f"{res_flex['phi_Mn']} kNm", f"D/C {dc_flex}")
+            with m2:
+                mini_metric("phi Vn", f"{res_shear['phi_Vn']} kN", f"D/C {dc_shear}")
+            with m3:
+                mini_metric("Stirrups", f"{n_legs}-{bar_v_name}", f"@ {res_shear['final_s']} mm" if res_shear["final_s"] else "FAIL")
+            with m4:
+                mini_metric("Strain", f"{res_flex['eps_t']}", res_flex["strain_class"])
 
             fig = draw_beam_section(b, h, cover_clear, bar_v, top_rg, bot_rg, res_flex, res_shear, zone, skin, skin_bar_dia)
             img_pad_l, img_mid, img_pad_r = st.columns([0.22, 0.56, 0.22])
@@ -789,11 +853,11 @@ if st.session_state.get("design_results_visible", False):
             check_row("Transverse spacing", res_shear["final_s"] > 0, f"s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm")
             check_row("Torsion threshold", not res_shear["needs_torsion"], f"Tu = {forces[zone]['T']:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"])
             skin_detail = (
-                f"h = {h:.0f} mm <= 900 mm; side-face skin bars not required"
+                f"{skin['layers']} layers of {skin['bars_per_layer']}-{skin_bar_name} each side; h = {h:.0f} mm <= 900 mm, not required"
                 if not skin["required"]
-                else f"{skin['bars_per_side']}-{skin_bar_name} each side over {skin['zone_height']} mm tension zone; s = {skin['spacing']} <= {skin['s_limit']} mm"
+                else f"{skin['layers']} layers of {skin['bars_per_layer']}-{skin_bar_name} each side; s = {skin['spacing']} <= {skin['s_limit']} mm"
             )
-            check_row("ACI side-face skin bars", True, skin_detail)
+            check_row("ACI side-face skin bars", skin["spacing_ok"], skin_detail)
 
             if st.toggle(f"Show calculation summary - {zone}", value=False, key=f"calc_summary_{zone}"):
                 st.dataframe(
