@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import pandas as pd
 import streamlit as st
 from fpdf import FPDF
@@ -43,8 +44,18 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 div[data-testid="metric-container"] {
     border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 10px 12px;
+    padding: 7px 9px;
     background: rgba(24,28,36,.95);
+}
+div[data-testid="metric-container"] label,
+div[data-testid="metric-container"] [data-testid="stMetricLabel"] {
+    font-size: 10px !important;
+}
+div[data-testid="metric-container"] [data-testid="stMetricValue"] {
+    font-size: 20px !important;
+}
+div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
+    font-size: 10px !important;
 }
 .app-hero {
     border: 1px solid var(--border);
@@ -457,13 +468,15 @@ def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone, s
 
 
 def draw_force_diagrams(forces, beam_length, df=None, selected_frame="Manual"):
-    fig, (ax_m, ax_v) = plt.subplots(2, 1, figsize=(2.65, 1.05), dpi=180, sharex=True)
+    fig, (ax_m, ax_v) = plt.subplots(2, 1, figsize=(3.15, 1.55), dpi=180, sharex=True)
     fig.patch.set_facecolor("#0f1117")
     for ax in (ax_m, ax_v):
         ax.set_facecolor("#181c24")
-        ax.grid(True, color="#364060", alpha=0.45, linestyle="--", linewidth=0.35)
+        ax.grid(True, color="#364060", alpha=0.36, linestyle="--", linewidth=0.28)
         ax.axhline(0, color="#e8eaf0", linewidth=0.45, alpha=0.75)
-        ax.tick_params(colors="#98a2b8", labelsize=4.8)
+        ax.tick_params(colors="#98a2b8", labelsize=4.0, length=2, pad=1)
+        ax.yaxis.set_major_locator(mticker.MaxNLocator(3))
+        ax.xaxis.set_major_locator(mticker.MaxNLocator(5))
         for spine in ax.spines.values():
             spine.set_color("#2a3044")
 
@@ -475,11 +488,11 @@ def draw_force_diagrams(forces, beam_length, df=None, selected_frame="Manual"):
             .sort_values("Station")
         )
         x = df_env["Station"]
-        ax_m.plot(x, df_env["M3_Max"], color="#4f8ef7", linewidth=0.9, label="+M")
-        ax_m.plot(x, df_env["M3_Min"], color="#f87171", linewidth=0.9, label="-M")
+        ax_m.plot(x, df_env["M3_Max"], color="#4f8ef7", linewidth=0.75, label="+M")
+        ax_m.plot(x, df_env["M3_Min"], color="#f87171", linewidth=0.75, label="-M")
         ax_m.fill_between(x, df_env["M3_Min"], df_env["M3_Max"], color="#7a84a0", alpha=0.18)
-        ax_v.plot(x, df_env["V2_Max"], color="#22c55e", linewidth=0.9, label="+V")
-        ax_v.plot(x, df_env["V2_Min"], color="#fbbf24", linewidth=0.9, label="-V")
+        ax_v.plot(x, df_env["V2_Max"], color="#22c55e", linewidth=0.75, label="+V")
+        ax_v.plot(x, df_env["V2_Min"], color="#fbbf24", linewidth=0.75, label="-V")
         ax_v.fill_between(x, df_env["V2_Min"], df_env["V2_Max"], color="#22c55e", alpha=0.12)
         title = f"Frame {selected_frame} - SAP2000 Envelope"
     else:
@@ -496,13 +509,21 @@ def draw_force_diagrams(forces, beam_length, df=None, selected_frame="Manual"):
         ax_m.annotate(f"j -{abs(forces['Right']['M']):.0f}", (x[2], m[2]), color="#f87171", fontsize=4.8, xytext=(-23, -7), textcoords="offset points")
         title = "Manual Design Demands"
 
-    ax_m.set_title(title, color="#e8eaf0", fontsize=5.8, fontweight="bold", pad=3)
-    ax_m.set_ylabel("M", color="#98a2b8", fontsize=5.2)
-    ax_v.set_ylabel("V", color="#98a2b8", fontsize=5.2)
-    ax_v.set_xlabel("Station (m)", color="#98a2b8", fontsize=5.2)
-    ax_m.legend(facecolor="#181c24", edgecolor="#2a3044", labelcolor="#e8eaf0", fontsize=4.5, loc="best")
-    ax_v.legend(facecolor="#181c24", edgecolor="#2a3044", labelcolor="#e8eaf0", fontsize=4.5, loc="best")
-    plt.tight_layout()
+    ax_m.set_title(title, color="#e8eaf0", fontsize=4.6, fontweight="bold", pad=2)
+    ax_m.set_ylabel("M", color="#98a2b8", fontsize=4.2, labelpad=1)
+    ax_v.set_ylabel("V", color="#98a2b8", fontsize=4.2, labelpad=1)
+    ax_v.set_xlabel("Station (m)", color="#98a2b8", fontsize=4.2, labelpad=1)
+    for ax in (ax_m, ax_v):
+        ax.legend(
+            facecolor="#181c24",
+            edgecolor="#2a3044",
+            labelcolor="#e8eaf0",
+            fontsize=3.5,
+            loc="upper left",
+            borderpad=0.2,
+            handlelength=1.6,
+        )
+    plt.tight_layout(pad=0.25, h_pad=0.25)
     return fig
 
 
@@ -674,6 +695,9 @@ with col_rebar:
 
 st.markdown("<div class='section-band'>Run Design</div>", unsafe_allow_html=True)
 if st.button("Run full 3-zone detailing design", type="primary", use_container_width=True):
+    st.session_state["design_results_visible"] = True
+
+if st.session_state.get("design_results_visible", False):
     pdf_zone_data = {}
     summary_rows = []
     st.markdown("<div class='section-band'>Three-Zone Cross Sections and Calculations</div>", unsafe_allow_html=True)
