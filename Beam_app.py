@@ -319,7 +319,7 @@ def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n
     Tu = abs(Tu_kNm) * 1_000_000
     A_leg = math.pi * bar_dia**2 / 4
     lambda_s = min(1.0, math.sqrt(2 / (1 + 0.004 * d)))
-    Vc = 0.17 * lambda_s * lambda_c * math.sqrt(fc) * b * d
+    Vc = 0.17 *  lambda_c * math.sqrt(fc) * b * d
     phi_Vc = phi_v * Vc
 
     x1 = max(1, b - 2 * (cover_clear + bar_dia / 2))
@@ -1041,18 +1041,31 @@ if st.session_state.get("design_results_visible", False):
                 else f"{skin['layers']} layer(s) of {skin['bars_per_layer']}-{skin_bar_name}; s = {skin['spacing']} <= {skin['s_limit']} mm"
             )
             check_row("ACI side-face skin bars", skin["spacing_ok"], skin_detail, extra_class="three-zone-scale")
-            torsion_long_detail = (
-                f"Tu <= phiTth; longitudinal torsion steel not required"
-                if not res_shear["needs_torsion"]
-                else f"skin Al = {skin['area_total']} mm2 vs Al req = {res_shear['Al_req']} mm2"
-            )
+            # --- UPDATED TORSION LONGITUDINAL STEEL (Al) CHECK ---
+            if res_shear["needs_torsion"]:
+                # Approximate required flexural tension steel based on the utilization ratio
+                flex_utilization = Mu / res_flex["phi_Mn"] if res_flex["phi_Mn"] > 0 else 1.0
+                As_flex_req = As_tens * min(flex_utilization, 1.0) # Cap at 1.0 if overstressed (fails flexure check anyway)
+                
+                # Total perimeter longitudinal steel provided
+                total_long_steel_provided = top_rg.area + bot_rg.area + skin["area_total"]
+                
+                # Total longitudinal steel required (Flexure + Torsion)
+                total_long_steel_req = As_flex_req + res_shear["Al_req"]
+                
+                torsion_long_ok = total_long_steel_provided >= total_long_steel_req
+                torsion_long_detail = f"Total As prov = {total_long_steel_provided:.0f} mm² vs Req (Flexure+Torsion) ≈ {total_long_steel_req:.0f} mm²"
+            else:
+                torsion_long_ok = True
+                torsion_long_detail = "Tu <= phiTth; longitudinal torsion steel not required"
+
             check_row(
-                "Skin bars for torsion Al",
-                (not res_shear["needs_torsion"]) or skin["area_total"] >= res_shear["Al_req"],
+                "Perimeter Torsion Steel (Al)",
+                torsion_long_ok,
                 torsion_long_detail,
                 extra_class="three-zone-scale",
             )
-
+            # -----------------------------------------------------
             if st.toggle(f"Show calculation summary - {zone}", value=False, key=f"calc_summary_{zone}"):
                 st.dataframe(
                     pd.DataFrame(
