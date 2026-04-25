@@ -627,17 +627,19 @@ if st.button("🚀 Run Full 3-Zone Detailing Design", type="primary", use_contai
                 st.error("🚨 Solver convergence failed.")
             elif not res_flex['passes_As_min']:
                 st.warning(f"⚠️ As < As,min ({res_flex['As_min']} mm²)")
-            elif not res_flex['passes_As_max_tc']:
-                st.warning(
-                    f"⚠️ As exceeds tension-controlled guide limit As,max(tc) = {res_flex['As_max_tc']} mm² "
-                    "(ACI 318-19 strain compatibility check)."
-                )
-            elif not res_flex['is_ductile']:
-                st.error("❌ Over-reinforced — compression-controlled.")
-            elif res_flex['phi_Mn'] >= Mu:
-                st.success("✅ Flexure OK")
             else:
-                st.error("❌ Flexure fails")
+                if not res_flex['passes_As_max_tc']:
+                    st.warning(
+                        f"⚠️ As exceeds tension-controlled guide limit As,max(tc) = {res_flex['As_max_tc']} mm² "
+                        "(ACI 318-19 strain compatibility check)."
+                    )
+
+                if not res_flex['is_ductile']:
+                    st.error("❌ Over-reinforced — compression-controlled.")
+                elif res_flex['phi_Mn'] >= Mu:
+                    st.success("✅ Flexure OK")
+                else:
+                    st.error("❌ Flexure fails")
 
             # ---- SHEAR ----
             if use_sap and df is not None and beam_length > 0 and zone in ["Left", "Right"]:
