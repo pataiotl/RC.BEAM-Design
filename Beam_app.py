@@ -1041,30 +1041,47 @@ if st.session_state.get("design_results_visible", False):
                 else f"{skin['layers']} layer(s) of {skin['bars_per_layer']}-{skin_bar_name}; s = {skin['spacing']} <= {skin['s_limit']} mm"
             )
             check_row("ACI side-face skin bars", skin["spacing_ok"], skin_detail, extra_class="three-zone-scale")
-            # --- UPDATED TORSION LONGITUDINAL STEEL (Al) CHECK ---
+            # --- MACGREGOR / ACI 318 FACE-BY-FACE TORSION CHECK ---
             if res_shear["needs_torsion"]:
-                # Approximate required flexural tension steel based on the utilization ratio
+                # 1. Distribute Al required based on gross perimeter geometry
+                # This guarantees the sum of all 4 faces equals exactly 100% of Al_req
+                gross_perimeter = 2 * (b + h)
+                face_ratio = b / gross_perimeter       # Ratio for ONE horizontal face (top or bottom)
+                side_ratio = (2 * h) / gross_perimeter # Ratio for BOTH vertical side faces combined
+                
+                Al_req_face = res_shear["Al_req"] * face_ratio 
+                Al_req_sides = res_shear["Al_req"] * side_ratio 
+                
+                # 2. Approximate required flexural tension steel
                 flex_utilization = Mu / res_flex["phi_Mn"] if res_flex["phi_Mn"] > 0 else 1.0
-                As_flex_req = As_tens * min(flex_utilization, 1.0) # Cap at 1.0 if overstressed (fails flexure check anyway)
+                As_flex_req = As_tens * min(flex_utilization, 1.0)
                 
-                # Total perimeter longitudinal steel provided
-                total_long_steel_provided = top_rg.area + bot_rg.area + skin["area_total"]
+                # 3. Check Tension Face (Flexure + Torsion MUST sum here)
+                tension_face_prov = bot_rg.area if zone == "Mid" else top_rg.area
+                tension_face_req = As_flex_req + Al_req_face
+                tension_face_ok = tension_face_prov >= tension_face_req
                 
-                # Total longitudinal steel required (Flexure + Torsion)
-                total_long_steel_req = As_flex_req + res_shear["Al_req"]
+                # 4. Check Side Faces (Skin reinforcement for Torsion)
+                side_face_prov = skin["area_total"]
+                side_face_ok = side_face_prov >= Al_req_sides
                 
-                torsion_long_ok = total_long_steel_provided >= total_long_steel_req
-                torsion_long_detail = f"Total As prov = {total_long_steel_provided:.0f} mm² vs Req (Flexure+Torsion) ≈ {total_long_steel_req:.0f} mm²"
+                torsion_long_ok = tension_face_ok and side_face_ok
+                
+                if torsion_long_ok:
+                    torsion_long_detail = f"Tension face & sides OK. (Al req side: {Al_req_sides:.0f} mm², face: {Al_req_face:.0f} mm²)"
+                else:
+                    torsion_long_detail = f"FAIL: Tension face prov {tension_face_prov:.0f}/{tension_face_req:.0f} mm². Sides prov {side_face_prov:.0f}/{Al_req_sides:.0f} mm²"
             else:
                 torsion_long_ok = True
                 torsion_long_detail = "Tu <= phiTth; longitudinal torsion steel not required"
 
             check_row(
-                "Perimeter Torsion Steel (Al)",
+                "Face-by-Face Torsion Steel (Al)",
                 torsion_long_ok,
                 torsion_long_detail,
                 extra_class="three-zone-scale",
             )
+            # -----------------------------------------------------
             # -----------------------------------------------------
             if st.toggle(f"Show calculation summary - {zone}", value=False, key=f"calc_summary_{zone}"):
                 st.dataframe(
