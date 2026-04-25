@@ -318,8 +318,10 @@ def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n
     Vu = abs(Vu_kN) * 1000
     Tu = abs(Tu_kNm) * 1_000_000
     A_leg = math.pi * bar_dia**2 / 4
-    lambda_s = min(1.0, math.sqrt(2 / (1 + 0.004 * d)))
-    Vc = 0.17 *  lambda_c * math.sqrt(fc) * b * d
+    # lambda_s is NOT used in Vc when minimum stirrups are provided (ACI 318-19 Table 22.5.5.1)
+    # Eq. 22.5.5.1(c) is only for Av < Av,min; this app designs Av >= Av,min so use Eq. 22.5.5.1(a)
+    lambda_s = min(1.0, math.sqrt(2 / (1 + 0.004 * d)))  # Kept for display/reference only
+    Vc = 0.17 * lambda_c * math.sqrt(fc) * b * d
     phi_Vc = phi_v * Vc
 
     x1 = max(1, b - 2 * (cover_clear + bar_dia / 2))
@@ -393,7 +395,8 @@ def calculate_development_length(db, fy, fc, is_top_bar, cover_clear, clear_spac
     ld_calc = (fy / (1.1 * lambda_c * math.sqrt(fc))) * ((psi_t * psi_e * psi_s * psi_g) / conf_term) * db
     ld = max(ld_calc, 300)
     lap_splice = max(1.3 * ld, 300)
-    ldh_calc = max((0.24 * psi_e * psi_g * fy / (lambda_c * math.sqrt(fc))) * db, 8 * db, 150)
+    # ACI 318-19 Eq. 25.4.3.1a - hooked bar development length (metric)
+    ldh_calc = max(((fy * psi_e * psi_t * psi_g) / (23 * lambda_c * math.sqrt(fc))) * db**1.5, 8 * db, 150)
     return {
         "ld": math.ceil(ld / 50) * 50,
         "lap": math.ceil(lap_splice / 50) * 50,
@@ -436,14 +439,23 @@ def check_row(label, ok, detail, warn=False, extra_class=""):
     )
 
 
-def calculate_skin_reinforcement(h, d, skin_bar_dia, skin_bar_qty, skin_layers):
+def calculate_skin_reinforcement(h, d, skin_bar_dia, skin_bar_qty, skin_layers, zone_height_override=None):
     required = h > 900
     s_limit = min(d / 6, 300) if d > 0 else 300
     zone_height = h / 2
     bar_area = math.pi * skin_bar_dia**2 / 4
     provided_layers = max(1, int(skin_layers))
     bars_per_layer = max(0, int(skin_bar_qty))
-    spacing = 250 if provided_layers > 1 else zone_height
+
+    # FIX: Calculate actual spacing based on number of layers and available height
+    if provided_layers > 1:
+        # Distribute layers evenly across the tension zone (h/2 from neutral axis region)
+        # ACI requires skin reinforcement in the tension zone (h/2 from extreme tension fiber)
+        available_height = zone_height - 2 * 50  # Subtract cover from top and bottom of zone
+        spacing = available_height / (provided_layers - 1) if provided_layers > 1 else zone_height
+    else:
+        spacing = zone_height
+
     spacing_ok = (not required) or spacing <= s_limit
     total_bars = bars_per_layer * provided_layers
     area_total = total_bars * bar_area
@@ -522,9 +534,10 @@ def draw_beam_section(b, h, cover, tie_dia, top_rg, bot_rg, flex, shear, zone, s
         if skin["layers"] == 1:
             y_vals = [h / 2]
         else:
-            total_height = 250 * (skin["layers"] - 1)
+            # FIX: Use actual calculated spacing from skin reinforcement calculation
+            total_height = skin["spacing"] * (skin["layers"] - 1)
             y_top = h / 2 - total_height / 2
-            y_vals = [y_top + i * 250 for i in range(skin["layers"])]
+            y_vals = [y_top + i * skin["spacing"] for i in range(skin["layers"])]
         left_base = cover + tie_dia + skin_bar_dia / 2
         right_base = b - cover - tie_dia - skin_bar_dia / 2
         bars_each_side = max(1, math.ceil(skin["bars_per_layer"] / 2))
@@ -692,7 +705,7 @@ def create_pdf_report(b, h, fc, fy, fyt, frame_name, zone_data, input_mode):
     _subheading("Design Results by Zone")
     for zone in ["Left", "Mid", "Right"]:
         data = zone_data.get(zone)
-        
+
         # Always print the header for the zone so the reviewer knows it was checked
         pdf.set_font("Arial", "B", 10)
         pdf.set_fill_color(245, 245, 245)
@@ -929,7 +942,10 @@ with col_rebar:
                 "top": get_rebar_group(t_n1, t_d1, t_n2, t_d2, t_n3, t_d3, cover_clear, bar_v, clear_space),
                 "bot": get_rebar_group(b_n1, b_d1, b_n2, b_d2, b_n3, b_d3, cover_clear, bar_v, clear_space),
             }
-            bar_selections[zone] = {"top_d1": t_d1 if t_n1 > 0 else 0, "bot_d1": b_d1 if b_n1 > 0 else 0}
+            # FIX: Get first non-zero layer diameter for development length calculations
+            top_d = t_d1 if t_n1 > 0 else (t_d2 if t_n2 > 0 else (t_d3 if t_n3 > 0 else 0))
+            bot_d = b_d1 if b_n1 > 0 else (b_d2 if b_n2 > 0 else (b_d3 if b_n3 > 0 else 0))
+            bar_selections[zone] = {"top_d1": top_d, "bot_d1": bot_d}
 
 st.markdown("<div class='section-band'>Run Design</div>", unsafe_allow_html=True)
 if st.button("Run full 3-zone detailing design", type="primary", use_container_width=True):
@@ -1005,13 +1021,33 @@ if st.session_state.get("design_results_visible", False):
             res_flex = calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As_tens, As_comp)
             res_shear = calculate_shear_torsion(b, h, d, fc, fyt, fy, cover_clear, Vu_design, Tu_design, n_legs, bar_v, lambda_c)
             skin = calculate_skin_reinforcement(h, d, skin_bar_dia, skin_bar_qty, skin_layers)
-            dev_top = calculate_development_length(bar_selections[zone]["top_d1"], fy, fc, True, cover_clear, clear_space, lambda_c)
-            dev_bot = calculate_development_length(bar_selections[zone]["bot_d1"], fy, fc, False, cover_clear, clear_space, lambda_c)
+
+            # FIX: Use correct bar diameter for development length based on zone (top bars at supports, bottom at midspan)
+            # At supports (negative moment), top bars are in tension - check their development
+            # At midspan (positive moment), bottom bars are in tension - check their development
+            top_bar_dia = bar_selections[zone]["top_d1"]
+            bot_bar_dia = bar_selections[zone]["bot_d1"]
+
+            # For top bars at supports (negative moment region) - top bars are tension bars
+            dev_top = calculate_development_length(top_bar_dia, fy, fc, True, cover_clear, clear_space, lambda_c)
+            # For bottom bars - at midspan they are tension, at supports they may be compression
+            # Use is_top_bar=False for bottom bars (they are cast at bottom regardless of moment)
+            dev_bot = calculate_development_length(bot_bar_dia, fy, fc, False, cover_clear, clear_space, lambda_c)
+
             dc_flex = round(Mu / res_flex["phi_Mn"], 2) if res_flex["phi_Mn"] > 0 else 999.9
             dc_shear = round(Vu_design / res_shear["phi_Vn"], 2) if res_shear.get("phi_Vn", 0) > 0 else 999.9
 
-            flex_ok = res_flex["converged"] and res_flex["passes_As_min"] and res_flex["is_ductile"] and res_flex["phi_Mn"] >= Mu
-            shear_ok = res_shear["final_s"] > 0
+            # FIX: Include As_max_tc check in flexure pass/fail
+            flex_ok = (
+                res_flex["converged"]
+                and res_flex["passes_As_min"]
+                and res_flex["is_ductile"]
+                and res_flex["passes_As_max_tc"]  # FIX: Added over-reinforcement check
+                and res_flex["phi_Mn"] >= Mu
+            )
+            # FIX: Include phi_Vn >= Vu check in shear pass/fail
+            shear_ok = res_shear["phi_Vn"] >= Vu_design and res_shear["final_s"] > 0
+
             if flex_ok and shear_ok:
                 status_card("pass", f"{zone} passes flexure and shear/torsion preliminary checks.", extra_class="three-zone-scale")
             elif res_flex["phi_Mn"] >= Mu and shear_ok:
@@ -1039,6 +1075,7 @@ if st.session_state.get("design_results_visible", False):
             check_row("Flexure phiMn >= Mu", res_flex["phi_Mn"] >= Mu, f"{m_combo}; {res_flex['phi_Mn']} >= {Mu:.1f} kNm", extra_class="three-zone-scale")
             check_row("Minimum As", res_flex["passes_As_min"], f"As = {As_tens:.1f}; As,min = {res_flex['As_min']} mm2", extra_class="three-zone-scale")
             check_row("Tension-controlled", res_flex["is_ductile"], f"eps_t = {res_flex['eps_t']}; phi = {res_flex['phi']}", warn=not res_flex["is_ductile"] and res_flex["phi_Mn"] >= Mu, extra_class="three-zone-scale")
+            check_row("Max As (tension-controlled)", res_flex["passes_As_max_tc"], f"As = {As_tens:.1f}; As,max,tc = {res_flex['As_max_tc']} mm2", extra_class="three-zone-scale")  # FIX: Added check display
             check_row("Shear phiVn >= Vu", res_shear["phi_Vn"] >= Vu_design, f"{v_combo}; {res_shear['phi_Vn']} >= {Vu_design:.1f} kN", extra_class="three-zone-scale")
             check_row("Transverse spacing", res_shear["final_s"] > 0, f"s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm", extra_class="three-zone-scale")
             check_row("Torsion threshold", not res_shear["needs_torsion"], f"{t_combo}; Tu = {Tu_design:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"], extra_class="three-zone-scale")
@@ -1055,29 +1092,29 @@ if st.session_state.get("design_results_visible", False):
                 gross_perimeter = 2 * (b + h)
                 face_ratio = b / gross_perimeter       # Ratio for ONE horizontal face (top or bottom)
                 side_ratio = (2 * h) / gross_perimeter # Ratio for BOTH vertical side faces combined
-                
-                Al_req_face = res_shear["Al_req"] * face_ratio 
-                Al_req_sides = res_shear["Al_req"] * side_ratio 
-                
+
+                Al_req_face = res_shear["Al_req"] * face_ratio
+                Al_req_sides = res_shear["Al_req"] * side_ratio
+
                 # 2. Approximate required flexural tension steel
                 flex_utilization = Mu / res_flex["phi_Mn"] if res_flex["phi_Mn"] > 0 else 1.0
                 As_flex_req = As_tens * min(flex_utilization, 1.0)
-                
+
                 # 3. Check Tension Face (Flexure + Torsion MUST sum here)
                 tension_face_prov = bot_rg.area if zone == "Mid" else top_rg.area
                 tension_face_req = As_flex_req + Al_req_face
                 tension_face_ok = tension_face_prov >= tension_face_req
-                
+
                 # 4. Check Side Faces (Skin reinforcement for Torsion)
                 side_face_prov = skin["area_total"]
                 side_face_ok = side_face_prov >= Al_req_sides
-                
+
                 torsion_long_ok = tension_face_ok and side_face_ok
-                
+
                 if torsion_long_ok:
-                    torsion_long_detail = f"Tension face & sides OK. (Al req side: {Al_req_sides:.0f} mm², face: {Al_req_face:.0f} mm²)"
+                    torsion_long_detail = f"Tension face & sides OK. (Al req side: {Al_req_sides:.0f} mm2, face: {Al_req_face:.0f} mm2)"
                 else:
-                    torsion_long_detail = f"FAIL: Tension face prov {tension_face_prov:.0f}/{tension_face_req:.0f} mm². Sides prov {side_face_prov:.0f}/{Al_req_sides:.0f} mm²"
+                    torsion_long_detail = f"FAIL: Tension face prov {tension_face_prov:.0f}/{tension_face_req:.0f} mm2. Sides prov {side_face_prov:.0f}/{Al_req_sides:.0f} mm2"
             else:
                 torsion_long_ok = True
                 torsion_long_detail = "Tu <= phiTth; longitudinal torsion steel not required"
@@ -1088,7 +1125,6 @@ if st.session_state.get("design_results_visible", False):
                 torsion_long_detail,
                 extra_class="three-zone-scale",
             )
-            # -----------------------------------------------------
             # -----------------------------------------------------
             if st.toggle(f"Show calculation summary - {zone}", value=False, key=f"calc_summary_{zone}"):
                 st.dataframe(
