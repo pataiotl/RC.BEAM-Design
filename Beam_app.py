@@ -12,6 +12,7 @@ from fpdf import FPDF
 
 
 st.set_page_config(page_title="RC Beam Designer - ACI 318-19", layout="wide")
+RESULTS_FONT_SCALE = 1.25
 
 st.markdown(
     """
@@ -400,32 +401,35 @@ def calculate_development_length(db, fy, fc, is_top_bar, cover_clear, clear_spac
     }
 
 
-def status_card(kind, text):
-    st.markdown(f"<div class='status-card status-{kind}'>{text}</div>", unsafe_allow_html=True)
+def status_card(kind, text, extra_class=""):
+    cls = f" {extra_class.strip()}" if extra_class else ""
+    st.markdown(f"<div class='status-card status-{kind}{cls}'>{text}</div>", unsafe_allow_html=True)
 
 
-def mini_metric(label, value, delta):
+def mini_metric(label, value, delta, extra_class=""):
+    cls = f" {extra_class.strip()}" if extra_class else ""
     st.markdown(
         f"""
-<div class="mini-metric">
-  <div class="mini-metric-label">{label}</div>
-  <div class="mini-metric-value">{value}</div>
-  <div class="mini-metric-delta">↗ {delta}</div>
+<div class="mini-metric{cls}">
+  <div class="mini-metric-label{cls}">{label}</div>
+  <div class="mini-metric-value{cls}">{value}</div>
+  <div class="mini-metric-delta{cls}">↗ {delta}</div>
 </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def check_row(label, ok, detail, warn=False):
-    cls = "badge-warn" if warn else ("badge-pass" if ok else "badge-fail")
+def check_row(label, ok, detail, warn=False, extra_class=""):
+    extra_cls = f" {extra_class.strip()}" if extra_class else ""
+    badge_cls = "badge-warn" if warn else ("badge-pass" if ok else "badge-fail")
     txt = "WARN" if warn else ("PASS" if ok else "FAIL")
     st.markdown(
         f"""
-<div class="check-row">
-  <div class="check-label">{label}</div>
-  <div class="check-detail">{detail}</div>
-  <div class="badge {cls}">{txt}</div>
+<div class="check-row{extra_cls}">
+  <div class="check-label{extra_cls}">{label}</div>
+  <div class="check-detail{extra_cls}">{detail}</div>
+  <div class="badge {badge_cls}{extra_cls}">{txt}</div>
 </div>
         """,
         unsafe_allow_html=True,
@@ -831,6 +835,37 @@ if st.button("Run full 3-zone detailing design", type="primary", use_container_w
 if st.session_state.get("design_results_visible", False):
     pdf_zone_data = {}
     summary_rows = []
+    st.markdown(
+        f"""
+<style>
+.three-zone-scale.zone-title {{
+    font-size: calc(18px * {RESULTS_FONT_SCALE});
+}}
+.three-zone-scale.status-card {{
+    font-size: calc(9px * {RESULTS_FONT_SCALE});
+}}
+.three-zone-scale.mini-metric-label {{
+    font-size: calc(5.5px * {RESULTS_FONT_SCALE});
+}}
+.three-zone-scale.mini-metric-value {{
+    font-size: calc(12px * {RESULTS_FONT_SCALE});
+}}
+.three-zone-scale.mini-metric-delta {{
+    font-size: calc(5.5px * {RESULTS_FONT_SCALE});
+}}
+.three-zone-scale.check-row {{
+    font-size: calc(14px * {RESULTS_FONT_SCALE});
+}}
+.three-zone-scale.check-detail {{
+    font-size: calc(12px * {RESULTS_FONT_SCALE});
+}}
+.three-zone-scale.badge {{
+    font-size: calc(11px * {RESULTS_FONT_SCALE});
+}}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("<div class='section-band'>Three-Zone Cross Sections and Calculations</div>", unsafe_allow_html=True)
     result_columns = st.columns(3, gap="small")
 
@@ -838,12 +873,12 @@ if st.session_state.get("design_results_visible", False):
         with result_columns[idx]:
             display_title = {"Left": "Left Support", "Mid": "Mid", "Right": "Right Support"}[zone]
             zone_label = {"Left": "i - left support", "Mid": "midspan", "Right": "j - right support"}[zone]
-            st.markdown(f"<div class='zone-title'>{display_title}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='zone-title three-zone-scale'>{display_title}</div>", unsafe_allow_html=True)
             st.caption(f"{zone} Section ({zone_label})")
             top_rg = rebar_data[zone]["top"]
             bot_rg = rebar_data[zone]["bot"]
             if top_rg.width_req > b or bot_rg.width_req > b:
-                status_card("fail", f"Bars do not fit in {b} mm width. Top requires {top_rg.width_req:.1f} mm, bottom requires {bot_rg.width_req:.1f} mm.")
+                status_card("fail", f"Bars do not fit in {b} mm width. Top requires {top_rg.width_req:.1f} mm, bottom requires {bot_rg.width_req:.1f} mm.", extra_class="three-zone-scale")
                 pdf_zone_data[zone] = None
                 continue
 
@@ -875,21 +910,21 @@ if st.session_state.get("design_results_visible", False):
             flex_ok = res_flex["converged"] and res_flex["passes_As_min"] and res_flex["is_ductile"] and res_flex["phi_Mn"] >= Mu
             shear_ok = res_shear["final_s"] > 0
             if flex_ok and shear_ok:
-                status_card("pass", f"{zone} passes flexure and shear/torsion preliminary checks.")
+                status_card("pass", f"{zone} passes flexure and shear/torsion preliminary checks.", extra_class="three-zone-scale")
             elif res_flex["phi_Mn"] >= Mu and shear_ok:
-                status_card("warn", f"{zone} has enough strength, but detailing or ductility needs review.")
+                status_card("warn", f"{zone} has enough strength, but detailing or ductility needs review.", extra_class="three-zone-scale")
             else:
-                status_card("fail", f"{zone} fails one or more required checks.")
+                status_card("fail", f"{zone} fails one or more required checks.", extra_class="three-zone-scale")
 
             m1, m2, m3, m4 = st.columns(4)
             with m1:
-                mini_metric("phi Mn", f"{res_flex['phi_Mn']} kNm", f"{m_combo} | D/C {dc_flex}")
+                mini_metric("phi Mn", f"{res_flex['phi_Mn']} kNm", f"{m_combo} | D/C {dc_flex}", extra_class="three-zone-scale")
             with m2:
-                mini_metric("phi Vn", f"{res_shear['phi_Vn']} kN", f"{v_combo} | D/C {dc_shear}")
+                mini_metric("phi Vn", f"{res_shear['phi_Vn']} kN", f"{v_combo} | D/C {dc_shear}", extra_class="three-zone-scale")
             with m3:
-                mini_metric("Stirrups", f"{n_legs}-{bar_v_name}", f"@ {res_shear['final_s']} mm" if res_shear["final_s"] else "FAIL")
+                mini_metric("Stirrups", f"{n_legs}-{bar_v_name}", f"@ {res_shear['final_s']} mm" if res_shear["final_s"] else "FAIL", extra_class="three-zone-scale")
             with m4:
-                mini_metric("Strain", f"{res_flex['eps_t']}", res_flex["strain_class"])
+                mini_metric("Strain", f"{res_flex['eps_t']}", res_flex["strain_class"], extra_class="three-zone-scale")
 
             fig = draw_beam_section(b, h, cover_clear, bar_v, top_rg, bot_rg, res_flex, res_shear, zone, skin, skin_bar_dia)
             img_pad_l, img_mid, img_pad_r = st.columns([0.22, 0.56, 0.22])
@@ -898,18 +933,18 @@ if st.session_state.get("design_results_visible", False):
             plt.close(fig)
 
             st.markdown("<div class='section-band'>ACI Style Checks</div>", unsafe_allow_html=True)
-            check_row("Flexure phiMn >= Mu", res_flex["phi_Mn"] >= Mu, f"{m_combo}; {res_flex['phi_Mn']} >= {Mu:.1f} kNm")
-            check_row("Minimum As", res_flex["passes_As_min"], f"As = {As_tens:.1f}; As,min = {res_flex['As_min']} mm2")
-            check_row("Tension-controlled", res_flex["is_ductile"], f"eps_t = {res_flex['eps_t']}; phi = {res_flex['phi']}", warn=not res_flex["is_ductile"] and res_flex["phi_Mn"] >= Mu)
-            check_row("Shear phiVn >= Vu", res_shear["phi_Vn"] >= Vu_design, f"{v_combo}; {res_shear['phi_Vn']} >= {Vu_design:.1f} kN")
-            check_row("Transverse spacing", res_shear["final_s"] > 0, f"s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm")
-            check_row("Torsion threshold", not res_shear["needs_torsion"], f"{t_combo}; Tu = {Tu_design:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"])
+            check_row("Flexure phiMn >= Mu", res_flex["phi_Mn"] >= Mu, f"{m_combo}; {res_flex['phi_Mn']} >= {Mu:.1f} kNm", extra_class="three-zone-scale")
+            check_row("Minimum As", res_flex["passes_As_min"], f"As = {As_tens:.1f}; As,min = {res_flex['As_min']} mm2", extra_class="three-zone-scale")
+            check_row("Tension-controlled", res_flex["is_ductile"], f"eps_t = {res_flex['eps_t']}; phi = {res_flex['phi']}", warn=not res_flex["is_ductile"] and res_flex["phi_Mn"] >= Mu, extra_class="three-zone-scale")
+            check_row("Shear phiVn >= Vu", res_shear["phi_Vn"] >= Vu_design, f"{v_combo}; {res_shear['phi_Vn']} >= {Vu_design:.1f} kN", extra_class="three-zone-scale")
+            check_row("Transverse spacing", res_shear["final_s"] > 0, f"s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm", extra_class="three-zone-scale")
+            check_row("Torsion threshold", not res_shear["needs_torsion"], f"{t_combo}; Tu = {Tu_design:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"], extra_class="three-zone-scale")
             skin_detail = (
                 f"{skin['layers']} layer(s) of {skin['bars_per_layer']}-{skin_bar_name}; h = {h:.0f} mm <= 900 mm, not required"
                 if not skin["required"]
                 else f"{skin['layers']} layer(s) of {skin['bars_per_layer']}-{skin_bar_name}; s = {skin['spacing']} <= {skin['s_limit']} mm"
             )
-            check_row("ACI side-face skin bars", skin["spacing_ok"], skin_detail)
+            check_row("ACI side-face skin bars", skin["spacing_ok"], skin_detail, extra_class="three-zone-scale")
             torsion_long_detail = (
                 f"Tu <= phiTth; longitudinal torsion steel not required"
                 if not res_shear["needs_torsion"]
@@ -919,6 +954,7 @@ if st.session_state.get("design_results_visible", False):
                 "Skin bars for torsion Al",
                 (not res_shear["needs_torsion"]) or skin["area_total"] >= res_shear["Al_req"],
                 torsion_long_detail,
+                extra_class="three-zone-scale",
             )
 
             if st.toggle(f"Show calculation summary - {zone}", value=False, key=f"calc_summary_{zone}"):
