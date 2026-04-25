@@ -604,59 +604,124 @@ def draw_force_diagrams(forces, beam_length, df=None, selected_frame="Manual"):
 
 
 def create_pdf_report(b, h, fc, fy, fyt, frame_name, zone_data, input_mode):
+    def _to_float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _status(dc_value):
+        dc_numeric = _to_float(dc_value)
+        if dc_numeric is None:
+            return "N/A"
+        return "OK" if dc_numeric <= 1.0 else "NG"
+
+    def _table_row(col1, col2, col3, col4):
+        line_h = 6
+        pdf.set_font("Arial", "", 9)
+        pdf.cell(45, line_h, str(col1), border=1)
+        pdf.cell(45, line_h, str(col2), border=1)
+        pdf.cell(45, line_h, str(col3), border=1)
+        pdf.cell(45, line_h, str(col4), border=1, ln=True)
+
+    def _subheading(text):
+        pdf.set_font("Arial", "B", 10)
+        pdf.set_fill_color(233, 238, 248)
+        pdf.cell(0, 7, text, ln=True, fill=True)
+
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.add_page()
     pdf.set_margins(15, 15, 15)
-    pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 7, "RC Beam Design Calculation Package", ln=True, align="C")
-    pdf.set_font("Arial", "", 10)
-    pdf.cell(0, 5, f"Frame ID: {frame_name} | Code: ACI 318-19 | Input: {input_mode}", ln=True, align="C")
-    pdf.cell(0, 5, f"Section: {b}x{h} mm | fc = {fc} MPa | fy = {fy} MPa | fyt = {fyt} MPa", ln=True, align="C")
-    pdf.ln(6)
-    pdf.set_font("Arial", "B", 11)
-    pdf.cell(0, 6, "Zone Capacities and Detailing", ln=True)
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    pdf.set_font("Arial", "B", 15)
+    pdf.cell(0, 8, "REINFORCED CONCRETE BEAM", ln=True, align="C")
+    pdf.cell(0, 7, "CALCULATION REPORT", ln=True, align="C")
+    pdf.ln(1)
+    pdf.set_draw_color(80, 80, 80)
+    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+    pdf.ln(3)
+
+    _subheading("Project / Member Information")
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(45, 6, "Frame / Beam ID", border=1)
+    pdf.cell(45, 6, str(frame_name), border=1)
+    pdf.cell(45, 6, "Design Code", border=1)
+    pdf.cell(45, 6, "ACI 318-19", border=1, ln=True)
+    pdf.cell(45, 6, "Input Source", border=1)
+    pdf.cell(45, 6, str(input_mode), border=1)
+    pdf.cell(45, 6, "Section Size", border=1)
+    pdf.cell(45, 6, f"{b} mm x {h} mm", border=1, ln=True)
+    pdf.cell(45, 6, "Concrete Strength (fc')", border=1)
+    pdf.cell(45, 6, f"{fc} MPa", border=1)
+    pdf.cell(45, 6, "Steel Yield (fy / fyt)", border=1)
+    pdf.cell(45, 6, f"{fy} / {fyt} MPa", border=1, ln=True)
+    pdf.ln(3)
+
+    _subheading("Design Results by Zone")
     for zone in ["Left", "Mid", "Right"]:
         data = zone_data.get(zone)
         if not data:
             continue
+        pdf.set_font("Arial", "B", 10)
+        pdf.set_fill_color(245, 245, 245)
+        pdf.cell(0, 7, f"{zone.upper()} ZONE", ln=True, border=1, fill=True)
+
         pdf.set_font("Arial", "B", 9)
-        pdf.cell(17, 5, f"{zone}:", border=0)
+        pdf.cell(45, 6, "Check Item", border=1)
+        pdf.cell(45, 6, "Demand", border=1)
+        pdf.cell(45, 6, "Capacity / Details", border=1)
+        pdf.cell(45, 6, "Result", border=1, ln=True)
+
+        _table_row(
+            "Flexure",
+            f"Mu = {data['Mu']} kNm ({data['M_combo']})",
+            f"phiMn = {data['phi_Mn']} kNm | D/C = {data['DC_flex']}",
+            _status(data["DC_flex"]),
+        )
+        _table_row(
+            "Shear",
+            f"Vu = {data['Vu']} kN ({data['V_combo']})",
+            f"phiVn = {data['phi_Vn']} kN | D/C = {data['DC_shear']}",
+            _status(data["DC_shear"]),
+        )
+        _table_row(
+            "Torsion",
+            f"Tu = {data['Tu']} kNm ({data['T_combo']})",
+            f"Status: {data['torsion_status']} | Al req = {data['Al_req']} mm2",
+            "CHECK",
+        )
+        _table_row(
+            "Skin Reinforcement",
+            f"Skin Al = {data['skin_Al']} mm2",
+            f"Bars: {data['skin_detail']}",
+            "PROVIDED",
+        )
+
+        pdf.set_font("Arial", "B", 9)
+        pdf.cell(0, 6, "Detailing / Serviceability", border=1, ln=True)
         pdf.set_font("Arial", "", 9)
-        pdf.cell(
+        pdf.multi_cell(
             0,
             5,
-            f"Mu {data['Mu']} kNm ({data['M_combo']}) | phiMn {data['phi_Mn']} kNm | Flex D/C {data['DC_flex']}",
-            ln=True,
+            (
+                f"- Stirrups: {data['stirrups']}\n"
+                f"- Strain data: eps_t = {data['eps_t']}, phi = {data['phi']}, class = {data['strain_class']}\n"
+                f"- Development / Lap lengths: top hook = {data['dev_top']} mm, "
+                f"top lap = {data['dev_top_lap']} mm, bottom lap = {data['dev_bot']} mm"
+            ),
+            border=1,
         )
-        pdf.cell(17, 5, "", border=0)
-        pdf.cell(
-            0,
-            5,
-            f"Vu {data['Vu']} kN ({data['V_combo']}) | phiVn {data['phi_Vn']} kN | Shear D/C {data['DC_shear']} | {data['stirrups']}",
-            ln=True,
-        )
-        pdf.cell(17, 5, "", border=0)
-        pdf.cell(
-            0,
-            5,
-            f"Tu {data['Tu']} kNm ({data['T_combo']}) | Torsion: {data['torsion_status']} | Al req {data['Al_req']} mm2 | Skin Al {data['skin_Al']} mm2",
-            ln=True,
-        )
-        pdf.cell(17, 5, "", border=0)
-        pdf.cell(
-            0,
-            5,
-            f"Strain {data['eps_t']} | phi {data['phi']} | {data['strain_class']} | Skin bars: {data['skin_detail']}",
-            ln=True,
-        )
-        pdf.cell(17, 5, "", border=0)
-        pdf.cell(
-            0,
-            5,
-            f"Top hook {data['dev_top']} mm | Top lap {data['dev_top_lap']} mm | Bottom lap {data['dev_bot']} mm",
-            ln=True,
-        )
-        pdf.ln(1)
+        pdf.ln(2)
+
+    pdf.set_font("Arial", "I", 8)
+    pdf.set_text_color(90, 90, 90)
+    pdf.multi_cell(
+        0,
+        4,
+        "Note: This report summarizes governing strength and detailing checks from the design workspace. "
+        "Final engineering approval and project-specific compliance remain the responsibility of the designer.",
+    )
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         pdf.output(tmp_pdf.name)
         with open(tmp_pdf.name, "rb") as f:
