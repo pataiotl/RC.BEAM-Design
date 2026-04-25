@@ -692,11 +692,18 @@ def create_pdf_report(b, h, fc, fy, fyt, frame_name, zone_data, input_mode):
     _subheading("Design Results by Zone")
     for zone in ["Left", "Mid", "Right"]:
         data = zone_data.get(zone)
-        if not data:
-            continue
+        
+        # Always print the header for the zone so the reviewer knows it was checked
         pdf.set_font("Arial", "B", 10)
         pdf.set_fill_color(245, 245, 245)
         pdf.cell(0, 7, f"{zone.upper()} ZONE", ln=True, border=1, fill=True)
+
+        # If data is None, it means the bar spacing/width check failed earlier
+        if not data:
+            pdf.set_font("Arial", "B", 9)
+            pdf.cell(0, 8, "DESIGN ABORTED: Reinforcement layers do not fit within the specified section width.", border=1, ln=True, align="C")
+            pdf.ln(3)
+            continue
 
         pdf.set_font("Arial", "B", 9)
         pdf.cell(28, 7, "Check Item", border=1)
