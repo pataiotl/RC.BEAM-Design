@@ -12,7 +12,6 @@ from fpdf import FPDF
 
 
 st.set_page_config(page_title="RC Beam Designer - ACI 318-19", layout="wide")
-RESULTS_FONT_SCALE = 1.25
 
 st.markdown(
     """
