@@ -12,6 +12,7 @@ from fpdf import FPDF
 
 
 st.set_page_config(page_title="RC Beam Designer - ACI 318-19", layout="wide")
+RESULTS_FONT_SCALE = 1.25
 
 st.markdown(
     """
@@ -831,6 +832,37 @@ if st.button("Run full 3-zone detailing design", type="primary", use_container_w
 if st.session_state.get("design_results_visible", False):
     pdf_zone_data = {}
     summary_rows = []
+    st.markdown(
+        f"""
+<style>
+.zone-title {{
+    font-size: calc(18px * {RESULTS_FONT_SCALE});
+}}
+.status-card {{
+    font-size: calc(9px * {RESULTS_FONT_SCALE});
+}}
+.mini-metric-label {{
+    font-size: calc(5.5px * {RESULTS_FONT_SCALE});
+}}
+.mini-metric-value {{
+    font-size: calc(12px * {RESULTS_FONT_SCALE});
+}}
+.mini-metric-delta {{
+    font-size: calc(5.5px * {RESULTS_FONT_SCALE});
+}}
+.check-row {{
+    font-size: calc(14px * {RESULTS_FONT_SCALE});
+}}
+.check-detail {{
+    font-size: calc(12px * {RESULTS_FONT_SCALE});
+}}
+.badge {{
+    font-size: calc(11px * {RESULTS_FONT_SCALE});
+}}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("<div class='section-band'>Three-Zone Cross Sections and Calculations</div>", unsafe_allow_html=True)
     result_columns = st.columns(3, gap="small")
 
