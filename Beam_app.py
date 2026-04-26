@@ -804,6 +804,7 @@ force_meta = {
 }
 beam_length = 6.0
 selected_frame = "Manual"
+selected_frame_label = "Manual"
 df = None
 
 
@@ -830,22 +831,52 @@ if use_sap:
         if "Frame" not in df_raw.columns:
             st.error("CSV must contain a Frame column.")
         else:
-            selected_frame = st.selectbox("Select beam frame", df_raw["Frame"].dropna().unique())
-            df = df_raw[df_raw["Frame"] == selected_frame].copy()
+            available_frames = sorted(df_raw["Frame"].dropna().astype(str).unique().tolist())
+            grouping_mode = st.radio(
+                "Frame design mode",
+                ["Single frame", "Grouped frames (envelope)"],
+                horizontal=True,
+                help="Grouped mode lets you design multiple similar beams at once using governing envelope forces.",
+            )
+
+            if grouping_mode == "Single frame":
+                selected_frame = st.selectbox("Select beam frame", available_frames)
+                selected_frames = [selected_frame]
+                selected_frame_label = selected_frame
+            else:
+                selected_frames = st.multiselect(
+                    "Select frames to group",
+                    available_frames,
+                    default=available_frames[: min(2, len(available_frames))],
+                    help="Pick beams with similar section/detailing intent. App will design for the worst force effects among the selected beams.",
+                )
+                if selected_frames:
+                    selected_frame = selected_frames[0]
+                    selected_frame_label = f"Group ({', '.join(selected_frames)})"
+                else:
+                    selected_frame = "No frame selected"
+                    selected_frame_label = "Grouped frames"
+                    st.warning("Please select at least one frame to run grouped design.")
+
+            df = df_raw[df_raw["Frame"].astype(str).isin(selected_frames)].copy() if selected_frames else pd.DataFrame()
             if "OutputCase" not in df.columns:
                 df["OutputCase"] = "Manual"
-            df["V2_abs"] = df["V2"].abs()
-            df["T_abs"] = df["T"].abs()
-            beam_length = float(df["Station"].max())
-            df_left = df[df["Station"] <= 0.1 * beam_length]
-            df_right = df[df["Station"] >= 0.9 * beam_length]
-            df_mid = df[(df["Station"] > 0.3 * beam_length) & (df["Station"] < 0.7 * beam_length)]
-            zone_frames = {"Left": df_left, "Mid": df_mid if not df_mid.empty else df, "Right": df_right}
-            for z, zdf in zone_frames.items():
-                forces[z]["M"], force_meta[z]["M"] = governing_value_and_combo(zdf, "M3")
-                forces[z]["V"], force_meta[z]["V"] = governing_value_and_combo(zdf, "V2", "V2_abs")
-                forces[z]["T"], force_meta[z]["T"] = governing_value_and_combo(zdf, "T", "T_abs")
-            st.info(f"Beam {selected_frame}, L = {beam_length:.2f} m. ACI deflection h_min note: about {beam_length * 1000 / 18.5:.1f} mm for one-end-continuous.")
+            if not df.empty:
+                df["V2_abs"] = df["V2"].abs()
+                df["T_abs"] = df["T"].abs()
+                beam_length = float(df["Station"].max())
+                df_left = df[df["Station"] <= 0.1 * beam_length]
+                df_right = df[df["Station"] >= 0.9 * beam_length]
+                df_mid = df[(df["Station"] > 0.3 * beam_length) & (df["Station"] < 0.7 * beam_length)]
+                zone_frames = {"Left": df_left, "Mid": df_mid if not df_mid.empty else df, "Right": df_right}
+                for z, zdf in zone_frames.items():
+                    forces[z]["M"], force_meta[z]["M"] = governing_value_and_combo(zdf, "M3")
+                    forces[z]["V"], force_meta[z]["V"] = governing_value_and_combo(zdf, "V2", "V2_abs")
+                    forces[z]["T"], force_meta[z]["T"] = governing_value_and_combo(zdf, "T", "T_abs")
+                st.info(
+                    f"{selected_frame_label}, L = {beam_length:.2f} m. "
+                    f"ACI deflection h_min note: about {beam_length * 1000 / 18.5:.1f} mm for one-end-continuous."
+                )
     else:
         st.info("Upload a SAP2000 CSV file to begin.")
 else:
@@ -862,7 +893,7 @@ else:
             forces[zone]["T"] = st.number_input(f"Tu {zone} (kNm)", value=defaults[zone][2], step=1.0, min_value=0.0)
 
 st.markdown("<div class='section-band'>Bending and Shear Diagram</div>", unsafe_allow_html=True)
-force_fig = draw_force_diagrams(forces, beam_length, df=df, selected_frame=selected_frame)
+force_fig = draw_force_diagrams(forces, beam_length, df=df, selected_frame=selected_frame_label)
 st.pyplot(force_fig, use_container_width=False)
 plt.close(force_fig)
 
@@ -1192,8 +1223,9 @@ if st.session_state.get("design_results_visible", False):
     if summary_rows:
         st.markdown("<div class='section-band'>Design Summary Table</div>", unsafe_allow_html=True)
         st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-        pdf_bytes = create_pdf_report(b, h, fc, fy, fyt, selected_frame, pdf_zone_data, input_mode)
-        st.download_button("Download PDF calculation report", data=pdf_bytes, file_name=f"Beam_{selected_frame}_Report.pdf", mime="application/pdf", type="primary")
+        pdf_bytes = create_pdf_report(b, h, fc, fy, fyt, selected_frame_label, pdf_zone_data, input_mode)
+        safe_name = selected_frame_label.replace(" ", "_").replace(",", "_")
+        st.download_button("Download PDF calculation report", data=pdf_bytes, file_name=f"Beam_{safe_name}_Report.pdf", mime="application/pdf", type="primary")
 
 st.markdown(
     """
