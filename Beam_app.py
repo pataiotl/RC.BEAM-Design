@@ -257,6 +257,126 @@ for _k, _v in DEFAULT_APP_STATE.items():
 
 def build_workspace_excel_bytes():
     output = BytesIO()
+
+    def _encode_cell(value):
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return f"__json__:{json.dumps(value)}"
+
+    app_state_row = {k: _encode_cell(st.session_state.get(k)) for k in DEFAULT_APP_STATE.keys()}
+    app_state_df = pd.DataFrame([app_state_row])
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        app_state_df.to_excel(writer, sheet_name="app_state", index=False)
+        sap_json = st.session_state.get("sap_raw_json", "")
+        if sap_json:
+            sap_df = pd.read_json(BytesIO(sap_json.encode("utf-8")), orient="split")
+            sap_df.to_excel(writer, sheet_name="sap_raw_data", index=False)
+
+        design_summary = st.session_state.get("last_design_summary", [])
+        if design_summary:
+            pd.DataFrame(design_summary).to_excel(writer, sheet_name="design_summary", index=False)
+
+        design_zone_results = st.session_state.get("last_design_zone_results", {})
+        if design_zone_results:
+            zone_rows = []
+            for zone, data in design_zone_results.items():
+                if data is None:
+                    zone_rows.append({"Zone": zone, "Status": "Design aborted (bar fit issue)"})
+                else:
+                    row = {"Zone": zone}
+                    row.update(data)
+                    zone_rows.append(row)
+            pd.DataFrame(zone_rows).to_excel(writer, sheet_name="zone_results", index=False)
+    return output.getvalue()
+
+
+def load_workspace_excel(uploaded_excel):
+    def _decode_cell(value):
+        if isinstance(value, str) and value.startswith("__json__:"):
+            return json.loads(value[len("__json__:") :])
+        return value
+
+    workbook = pd.ExcelFile(uploaded_excel)
+    if "app_state" not in workbook.sheet_names:
+        raise ValueError("Missing app_state sheet")
+    app_state = pd.read_excel(workbook, sheet_name="app_state")
+
+    # Backward compatibility: old two-column layout (key, value_json)
+    if {"key", "value_json"}.issubset(app_state.columns):
+        for _, row in app_state.iterrows():
+            if row["key"] in DEFAULT_APP_STATE:
+                st.session_state[row["key"]] = json.loads(row["value_json"])
+    else:
+        if app_state.empty:
+            raise ValueError("app_state sheet is empty")
+        first_row = app_state.iloc[0].to_dict()
+        for key in DEFAULT_APP_STATE.keys():
+            if key in first_row:
+                st.session_state[key] = _decode_cell(first_row[key])
+
+    if "sap_raw_data" in workbook.sheet_names:
+        sap_df = pd.read_excel(workbook, sheet_name="sap_raw_data")
+        st.session_state["sap_raw_json"] = sap_df.to_json(orient="split")
+
+
+DEFAULT_APP_STATE = {
+    "input_mode": "Manual Input",
+    "beam_length": 6.0,
+    "mu_left": 200.0,
+    "vu_left": 150.0,
+    "tu_left": 0.0,
+    "mu_mid": 180.0,
+    "vu_mid": 60.0,
+    "tu_mid": 0.0,
+    "mu_right": 220.0,
+    "vu_right": 155.0,
+    "tu_right": 0.0,
+    "b": 300,
+    "h": 600,
+    "fc": 35,
+    "fy": 500,
+    "lambda_c": 1.0,
+    "fyt": 400,
+    "bar_v_name": "DB10",
+    "n_legs": 2,
+    "cover_clear": 40,
+    "clear_space": 25,
+    "skin_bar_qty": 2,
+    "skin_bar_name": "DB12",
+    "skin_layers": 2,
+    "grouping_mode": "Single frame",
+    "selected_frame_single": "Manual",
+    "selected_frames_group": [],
+    "design_results_visible": False,
+    "sap_raw_json": "",
+}
+for _zone in ["Left", "Mid", "Right"]:
+    _defaults = {"Left": (4, 2), "Mid": (2, 4), "Right": (4, 2)}[_zone]
+    DEFAULT_APP_STATE.update(
+        {
+            f"t1_{_zone}": _defaults[0],
+            f"td1_{_zone}": "DB25",
+            f"t2_{_zone}": 0,
+            f"td2_{_zone}": "DB20",
+            f"t3_{_zone}": 0,
+            f"td3_{_zone}": "DB20",
+            f"b1_{_zone}": _defaults[1],
+            f"bd1_{_zone}": "DB25",
+            f"b2_{_zone}": 0,
+            f"bd2_{_zone}": "DB20",
+            f"b3_{_zone}": 0,
+            f"bd3_{_zone}": "DB20",
+        }
+    )
+
+for _k, _v in DEFAULT_APP_STATE.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+
+def build_workspace_excel_bytes():
+    output = BytesIO()
     app_state_df = pd.DataFrame(
         [{"key": k, "value_json": json.dumps(st.session_state.get(k))} for k in DEFAULT_APP_STATE.keys()]
     )
@@ -1435,9 +1555,14 @@ if st.session_state.get("design_results_visible", False):
     if summary_rows:
         st.markdown("<div class='section-band'>Design Summary Table</div>", unsafe_allow_html=True)
         st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+        st.session_state["last_design_summary"] = summary_rows
+        st.session_state["last_design_zone_results"] = pdf_zone_data
         pdf_bytes = create_pdf_report(b, h, fc, fy, fyt, selected_frame_label, pdf_zone_data, input_mode)
         safe_name = selected_frame_label.replace(" ", "_").replace(",", "_")
         st.download_button("Download PDF calculation report", data=pdf_bytes, file_name=f"Beam_{safe_name}_Report.pdf", mime="application/pdf", type="primary")
+    else:
+        st.session_state["last_design_summary"] = []
+        st.session_state["last_design_zone_results"] = {}
 
 st.markdown(
     """
