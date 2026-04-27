@@ -268,36 +268,241 @@ def is_blank_excel_cell(value):
         return False
 
 
-def encode_workspace_cell(value):
-    if isinstance(value, (str, int, float, bool)) or value is None:
+def state_options_for_key(key):
+    if key == "input_mode":
+        return ["Manual Input", "SAP2000 CSV Upload"]
+    if key == "grouping_mode":
+        return ["Single frame", "Grouped frames (envelope)"]
+    if key == "lambda_c":
+        return [1.0, 0.85, 0.75]
+    if key == "bar_v_name":
+        return list(STIRRUP_OPTIONS.keys())
+    if key == "skin_bar_name":
+        return list(SKIN_BAR_OPTIONS.keys())
+    if key.startswith(("td", "bd")):
+        return list(BAR_OPTIONS.keys())
+    return None
+
+
+def state_min_value_for_key(key):
+    minimums = {
+        "beam_length": 1.0,
+        "b": 150,
+        "h": 200,
+        "fc": 20,
+        "fy": 300,
+        "fyt": 240,
+        "n_legs": 2,
+        "cover_clear": 20,
+        "clear_space": 20,
+        "skin_bar_qty": 0,
+        "skin_layers": 1,
+    }
+    for zone in ZONES:
+        minimums.update(
+            {
+                f"mu_{zone.lower()}": 0.0,
+                f"vu_{zone.lower()}": 0.0,
+                f"tu_{zone.lower()}": 0.0,
+                f"t1_{zone}": 0,
+                f"t2_{zone}": 0,
+                f"t3_{zone}": 0,
+                f"b1_{zone}": 0,
+                f"b2_{zone}": 0,
+                f"b3_{zone}": 0,
+            }
+        )
+    return minimums.get(key)
+
+
+def parse_editable_number(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = str(value).strip().replace(",", "")
+    match = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
+    if not match:
+        raise ValueError(f"Expected a number, got {value!r}")
+    return float(match.group(0))
+
+
+def normalize_option_value(key, value):
+    options = state_options_for_key(key)
+    if options is None:
         return value
-    return f"__json__:{json.dumps(value)}"
+
+    if key == "lambda_c":
+        number = parse_editable_number(value)
+        for option in options:
+            if abs(float(option) - number) < 1e-9:
+                return option
+        raise ValueError(f"{key} must be one of {options}")
+
+    text = str(value).strip()
+    aliases = {
+        "manual": "Manual Input",
+        "manual input": "Manual Input",
+        "sap": "SAP2000 CSV Upload",
+        "sap2000": "SAP2000 CSV Upload",
+        "sap2000 csv": "SAP2000 CSV Upload",
+        "sap2000 csv upload": "SAP2000 CSV Upload",
+        "single": "Single frame",
+        "single frame": "Single frame",
+        "group": "Grouped frames (envelope)",
+        "grouped": "Grouped frames (envelope)",
+        "grouped frames": "Grouped frames (envelope)",
+        "grouped frames (envelope)": "Grouped frames (envelope)",
+    }
+    lowered = text.lower()
+    if lowered in aliases and aliases[lowered] in options:
+        return aliases[lowered]
+    for option in options:
+        if text.lower() == str(option).lower():
+            return option
+    raise ValueError(f"{key} must be one of {options}")
 
 
-def decode_workspace_cell(key, value):
+def serialize_editable_value(value):
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if value is None:
+        return ""
+    return value
+
+
+def coerce_workspace_value(key, value):
     default = DEFAULT_APP_STATE[key]
     if is_blank_excel_cell(value):
         return default
     if isinstance(value, str) and value.startswith("__json__:"):
-        return json.loads(value[len("__json__:") :])
-    if isinstance(default, list) and isinstance(value, str):
-        try:
-            decoded = json.loads(value)
-            return decoded if isinstance(decoded, list) else default
-        except json.JSONDecodeError:
-            return default
-    return value
+        value = json.loads(value[len("__json__:") :])
+
+    if isinstance(default, bool):
+        if isinstance(value, bool):
+            coerced = value
+        else:
+            text = str(value).strip().lower()
+            if text in {"true", "yes", "y", "1"}:
+                coerced = True
+            elif text in {"false", "no", "n", "0"}:
+                coerced = False
+            else:
+                raise ValueError(f"{key} must be TRUE or FALSE")
+    elif isinstance(default, int) and not isinstance(default, bool):
+        coerced = int(round(parse_editable_number(value)))
+    elif isinstance(default, float):
+        coerced = parse_editable_number(value)
+    elif isinstance(default, list):
+        if isinstance(value, list):
+            coerced = [str(item).strip() for item in value if str(item).strip()]
+        else:
+            text = str(value).strip()
+            if not text:
+                coerced = []
+            else:
+                try:
+                    decoded = json.loads(text)
+                    if isinstance(decoded, list):
+                        coerced = [str(item).strip() for item in decoded if str(item).strip()]
+                    else:
+                        coerced = [str(decoded).strip()] if str(decoded).strip() else []
+                except json.JSONDecodeError:
+                    coerced = [item.strip() for item in re.split(r"[,;]", text) if item.strip()]
+    else:
+        coerced = str(value).strip()
+
+    minimum = state_min_value_for_key(key)
+    if minimum is not None and isinstance(coerced, (int, float)) and coerced < minimum:
+        raise ValueError(f"{key} must be at least {minimum}")
+    return normalize_option_value(key, coerced)
 
 
-def build_workspace_excel_bytes():
-    output = BytesIO()
-    app_state_row = {
-        key: encode_workspace_cell(st.session_state.get(key, default))
+def collect_workspace_state_for_export(active_input_mode=None, active_beam_length=None, active_forces=None):
+    export_state = {
+        key: st.session_state.get(key, default)
         for key, default in DEFAULT_APP_STATE.items()
     }
+    if active_input_mode is not None:
+        export_state["input_mode"] = active_input_mode
+    if active_beam_length is not None:
+        export_state["beam_length"] = round(float(active_beam_length), 6)
+    if active_forces:
+        for zone in ZONES:
+            zone_key = zone.lower()
+            export_state[f"mu_{zone_key}"] = round(float(active_forces[zone]["M"]), 6)
+            export_state[f"vu_{zone_key}"] = round(float(active_forces[zone]["V"]), 6)
+            export_state[f"tu_{zone_key}"] = round(float(active_forces[zone]["T"]), 6)
+    return export_state
+
+
+def build_app_state_dataframe(export_state, active_input_mode, active_beam_length, active_forces, force_meta, selected_frame_label):
+    rows = [
+        {
+            "section": "active force source",
+            "key": "active_force_source",
+            "value": active_input_mode,
+            "note": "Read-only helper row. The app imports input_mode below.",
+        },
+        {
+            "section": "active force source",
+            "key": "active_frame_or_group",
+            "value": selected_frame_label,
+            "note": "Read-only helper row.",
+        },
+        {
+            "section": "active force source",
+            "key": "active_beam_length_m",
+            "value": round(float(active_beam_length), 6),
+            "note": "Current design span from manual input or SAP stations.",
+        },
+    ]
+    for zone in ZONES:
+        zone_key = zone.lower()
+        for label, short_key in [("Mu", "M"), ("Vu", "V"), ("Tu", "T")]:
+            rows.append(
+                {
+                    "section": "active force source",
+                    "key": f"active_{label.lower()}_{zone_key}",
+                    "value": round(float(active_forces[zone][short_key]), 6),
+                    "note": force_meta[zone][short_key],
+                }
+            )
+
+    for key in DEFAULT_APP_STATE:
+        if key == "input_mode":
+            note = "Edit to Manual Input or SAP2000 CSV Upload."
+        elif key in {"beam_length", "mu_left", "vu_left", "tu_left", "mu_mid", "vu_mid", "tu_mid", "mu_right", "vu_right", "tu_right"}:
+            note = "Exported as the active design value. In SAP mode, edit sap_raw_data for SAP-derived forces."
+        elif isinstance(DEFAULT_APP_STATE[key], list):
+            note = "Use comma-separated values, for example B1, B2."
+        else:
+            note = ""
+        rows.append(
+            {
+                "section": "editable app_state",
+                "key": key,
+                "value": serialize_editable_value(export_state.get(key)),
+                "note": note,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_workspace_excel_bytes(active_input_mode, active_beam_length, active_forces, force_meta, selected_frame_label):
+    output = BytesIO()
+    export_state = collect_workspace_state_for_export(active_input_mode, active_beam_length, active_forces)
+    app_state_df = build_app_state_dataframe(
+        export_state,
+        active_input_mode,
+        active_beam_length,
+        active_forces,
+        force_meta,
+        selected_frame_label,
+    )
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        pd.DataFrame([app_state_row]).to_excel(writer, sheet_name="app_state", index=False)
+        app_state_df.to_excel(writer, sheet_name="app_state", index=False)
 
         sap_json = st.session_state.get("sap_raw_json", "")
         if sap_json:
@@ -336,12 +541,17 @@ def load_workspace_excel(uploaded_excel):
         for _, row in app_state.iterrows():
             key = row["key"]
             if key in DEFAULT_APP_STATE:
-                st.session_state[key] = json.loads(row["value_json"])
+                st.session_state[key] = coerce_workspace_value(key, json.loads(row["value_json"]))
+    elif {"key", "value"}.issubset(app_state.columns):
+        for _, row in app_state.iterrows():
+            key = str(row["key"]).strip()
+            if key in DEFAULT_APP_STATE:
+                st.session_state[key] = coerce_workspace_value(key, row["value"])
     else:
         first_row = app_state.iloc[0].to_dict()
         for key in DEFAULT_APP_STATE:
             if key in first_row:
-                st.session_state[key] = decode_workspace_cell(key, first_row[key])
+                st.session_state[key] = coerce_workspace_value(key, first_row[key])
 
     if "sap_raw_data" in workbook.sheet_names:
         sap_df = pd.read_excel(workbook, sheet_name="sap_raw_data")
@@ -995,15 +1205,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.expander("Save / Load Full Workspace"):
-    workspace_bytes = build_workspace_excel_bytes()
-    st.download_button(
-        "Save full workspace (.xlsx)",
-        data=workspace_bytes,
-        file_name="rc_beam_workspace.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        help="Includes keyed inputs plus SAP frame-force rows and the latest design summary if available.",
-    )
+with st.expander("Load Full Workspace"):
     uploaded_workspace = st.file_uploader("Load full workspace (.xlsx)", type=["xlsx"], key="workspace_loader")
     if uploaded_workspace is not None:
         try:
@@ -1111,6 +1313,16 @@ else:
             forces[zone]["M"] = st.number_input(f"Mu {zone} (kNm)", step=5.0, min_value=0.0, key=f"mu_{zone.lower()}")
             forces[zone]["V"] = st.number_input(f"Vu {zone} (kN)", step=5.0, min_value=0.0, key=f"vu_{zone.lower()}")
             forces[zone]["T"] = st.number_input(f"Tu {zone} (kNm)", step=1.0, min_value=0.0, key=f"tu_{zone.lower()}")
+
+with st.expander("Save Full Workspace"):
+    workspace_bytes = build_workspace_excel_bytes(input_mode, beam_length, forces, force_meta, selected_frame_label)
+    st.download_button(
+        "Save full workspace (.xlsx)",
+        data=workspace_bytes,
+        file_name="rc_beam_workspace.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="The app_state sheet is editable. In SAP mode it exports the active SAP-derived span and force demands.",
+    )
 
 st.markdown("<div class='section-band'>Bending and Shear Diagram</div>", unsafe_allow_html=True)
 force_fig = draw_force_diagrams(forces, beam_length, df=df, selected_frame=selected_frame_label)
