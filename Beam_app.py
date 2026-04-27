@@ -282,6 +282,107 @@ def load_workspace_excel(uploaded_excel):
         st.session_state["sap_raw_json"] = sap_df.to_json(orient="split")
 
 
+DEFAULT_APP_STATE = {
+    "input_mode": "Manual Input",
+    "beam_length": 6.0,
+    "mu_left": 200.0,
+    "vu_left": 150.0,
+    "tu_left": 0.0,
+    "mu_mid": 180.0,
+    "vu_mid": 60.0,
+    "tu_mid": 0.0,
+    "mu_right": 220.0,
+    "vu_right": 155.0,
+    "tu_right": 0.0,
+    "b": 300,
+    "h": 600,
+    "fc": 35,
+    "fy": 500,
+    "lambda_c": 1.0,
+    "fyt": 400,
+    "bar_v_name": "DB10",
+    "n_legs": 2,
+    "cover_clear": 40,
+    "clear_space": 25,
+    "skin_bar_qty": 2,
+    "skin_bar_name": "DB12",
+    "skin_layers": 2,
+    "grouping_mode": "Single frame",
+    "selected_frame_single": "Manual",
+    "selected_frames_group": [],
+    "design_results_visible": False,
+    "sap_raw_json": "",
+}
+for _zone in ["Left", "Mid", "Right"]:
+    _defaults = {"Left": (4, 2), "Mid": (2, 4), "Right": (4, 2)}[_zone]
+    DEFAULT_APP_STATE.update(
+        {
+            f"t1_{_zone}": _defaults[0],
+            f"td1_{_zone}": "DB25",
+            f"t2_{_zone}": 0,
+            f"td2_{_zone}": "DB20",
+            f"t3_{_zone}": 0,
+            f"td3_{_zone}": "DB20",
+            f"b1_{_zone}": _defaults[1],
+            f"bd1_{_zone}": "DB25",
+            f"b2_{_zone}": 0,
+            f"bd2_{_zone}": "DB20",
+            f"b3_{_zone}": 0,
+            f"bd3_{_zone}": "DB20",
+        }
+    )
+
+for _k, _v in DEFAULT_APP_STATE.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+
+def build_workspace_db_bytes():
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_db:
+        tmp_path = tmp_db.name
+    conn = sqlite3.connect(tmp_path)
+    try:
+        conn.execute("CREATE TABLE app_state (key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        rows = [(k, json.dumps(st.session_state.get(k))) for k in DEFAULT_APP_STATE.keys()]
+        conn.executemany("INSERT INTO app_state (key, value_json) VALUES (?, ?)", rows)
+        sap_json = st.session_state.get("sap_raw_json", "")
+        if sap_json:
+            sap_df = pd.read_json(BytesIO(sap_json.encode("utf-8")), orient="split")
+            sap_df.to_sql("sap_raw_data", conn, if_exists="replace", index=False)
+    finally:
+        conn.commit()
+        conn.close()
+    with open(tmp_path, "rb") as db_file:
+        db_bytes = db_file.read()
+    try:
+        os.remove(tmp_path)
+    except OSError:
+        pass
+    return db_bytes
+
+
+def load_workspace_db(uploaded_db):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_db:
+        tmp_db.write(uploaded_db.getvalue())
+        tmp_path = tmp_db.name
+    conn = sqlite3.connect(tmp_path)
+    try:
+        app_state = pd.read_sql_query("SELECT key, value_json FROM app_state", conn)
+        for _, row in app_state.iterrows():
+            if row["key"] in DEFAULT_APP_STATE:
+                st.session_state[row["key"]] = json.loads(row["value_json"])
+        tables = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
+        if "sap_raw_data" in tables:
+            sap_df = pd.read_sql_query("SELECT * FROM sap_raw_data", conn)
+            st.session_state["sap_raw_json"] = sap_df.to_json(orient="split")
+    finally:
+        conn.close()
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
 def get_rebar_group(n1, dia1, n2, dia2, n3, dia3, cover_clear, tie_dia, clear_space_input=25):
     if (n1 + n2 + n3) == 0:
         return RebarGroup(0.0, 0.0, 0.0, 0.0, [])
