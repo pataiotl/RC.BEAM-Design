@@ -1,4 +1,5 @@
 import html
+import hashlib
 import json
 import math
 import re
@@ -542,13 +543,15 @@ def build_zone_reinforcement_dataframe(export_state):
 
 def apply_project_input_dataframe(project_df):
     if project_df.empty:
-        return
+        return []
+    applied_keys = []
     if "key" in project_df.columns and "value" in project_df.columns:
         for _, row in project_df.iterrows():
             key = str(row["key"]).strip()
             if key in DEFAULT_APP_STATE:
                 st.session_state[key] = coerce_workspace_value(key, row["value"])
-        return
+                applied_keys.append(key)
+        return applied_keys
 
     if "label" in project_df.columns and "value" in project_df.columns:
         label_to_key = {
@@ -560,11 +563,14 @@ def apply_project_input_dataframe(project_df):
             key = label_to_key.get(label)
             if key:
                 st.session_state[key] = coerce_workspace_value(key, row["value"])
+                applied_keys.append(key)
+    return applied_keys
 
 
 def apply_zone_reinforcement_dataframe(zone_df):
     if zone_df.empty:
-        return
+        return []
+    applied_keys = []
     for _, row in zone_df.iterrows():
         qty_key = get_first_present(row, ["quantity_key"])
         qty_value = get_first_present(row, ["quantity", "qty", "number"])
@@ -574,9 +580,12 @@ def apply_zone_reinforcement_dataframe(zone_df):
         if isinstance(qty_key, str) and qty_key.strip() in DEFAULT_APP_STATE and qty_value is not None:
             key = qty_key.strip()
             st.session_state[key] = coerce_workspace_value(key, qty_value)
+            applied_keys.append(key)
         if isinstance(size_key, str) and size_key.strip() in DEFAULT_APP_STATE and size_value is not None:
             key = size_key.strip()
             st.session_state[key] = coerce_workspace_value(key, size_value)
+            applied_keys.append(key)
+    return applied_keys
 
 
 def collect_workspace_state_for_export(active_input_mode=None, active_beam_length=None, active_forces=None):
@@ -693,6 +702,9 @@ def build_workspace_excel_bytes(active_input_mode, active_beam_length, active_fo
 
 def load_workspace_excel(uploaded_excel):
     workbook = pd.ExcelFile(uploaded_excel)
+    app_state_keys = []
+    project_input_keys = []
+    zone_reinforcement_keys = []
     if "app_state" not in workbook.sheet_names:
         if "project_input_workspace" not in workbook.sheet_names and "zone_reinforcement" not in workbook.sheet_names:
             raise ValueError("Missing app_state sheet")
@@ -706,27 +718,36 @@ def load_workspace_excel(uploaded_excel):
                 key = row["key"]
                 if key in DEFAULT_APP_STATE:
                     st.session_state[key] = coerce_workspace_value(key, json.loads(row["value_json"]))
+                    app_state_keys.append(key)
         elif {"key", "value"}.issubset(app_state.columns):
             for _, row in app_state.iterrows():
                 key = str(row["key"]).strip()
                 if key in DEFAULT_APP_STATE:
                     st.session_state[key] = coerce_workspace_value(key, row["value"])
+                    app_state_keys.append(key)
         else:
             first_row = app_state.iloc[0].to_dict()
             for key in DEFAULT_APP_STATE:
                 if key in first_row:
                     st.session_state[key] = coerce_workspace_value(key, first_row[key])
+                    app_state_keys.append(key)
 
     if "project_input_workspace" in workbook.sheet_names:
-        apply_project_input_dataframe(pd.read_excel(workbook, sheet_name="project_input_workspace"))
+        project_input_keys = apply_project_input_dataframe(pd.read_excel(workbook, sheet_name="project_input_workspace"))
     if "zone_reinforcement" in workbook.sheet_names:
-        apply_zone_reinforcement_dataframe(pd.read_excel(workbook, sheet_name="zone_reinforcement"))
+        zone_reinforcement_keys = apply_zone_reinforcement_dataframe(pd.read_excel(workbook, sheet_name="zone_reinforcement"))
 
     if "sap_raw_data" in workbook.sheet_names:
         sap_df = pd.read_excel(workbook, sheet_name="sap_raw_data")
         st.session_state["sap_raw_json"] = sap_df.to_json(orient="split")
     elif is_blank_excel_cell(st.session_state.get("sap_raw_json")):
         st.session_state["sap_raw_json"] = ""
+
+    return {
+        "app_state": len(set(app_state_keys)),
+        "project_input_workspace": len(set(project_input_keys)),
+        "zone_reinforcement": len(set(zone_reinforcement_keys)),
+    }
 
 
 def get_rebar_group(n1, dia1, n2, dia2, n3, dia3, cover_clear, tie_dia, clear_space_input=25):
@@ -1377,12 +1398,26 @@ st.markdown(
 with st.expander("Load Full Workspace"):
     uploaded_workspace = st.file_uploader("Load full workspace (.xlsx)", type=["xlsx"], key="workspace_loader")
     if uploaded_workspace is not None:
-        try:
-            load_workspace_excel(uploaded_workspace)
-            st.success("Workspace loaded. Inputs and SAP data restored.")
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Could not read this workspace file: {exc}")
+        workspace_file_bytes = uploaded_workspace.getvalue()
+        workspace_signature = hashlib.sha256(workspace_file_bytes).hexdigest()
+        if st.session_state.get("_loaded_workspace_signature") != workspace_signature:
+            try:
+                load_summary = load_workspace_excel(BytesIO(workspace_file_bytes))
+                st.session_state["_loaded_workspace_signature"] = workspace_signature
+                st.session_state["_workspace_load_message"] = (
+                    "Workspace loaded. "
+                    f"Applied {load_summary['project_input_workspace']} Project Input fields, "
+                    f"{load_summary['zone_reinforcement']} reinforcement fields, "
+                    f"and {load_summary['app_state']} app_state fields."
+                )
+            except Exception as exc:
+                st.session_state["_workspace_load_message"] = f"Could not read this workspace file: {exc}"
+        load_message = st.session_state.get("_workspace_load_message")
+        if load_message:
+            if load_message.startswith("Could not"):
+                st.error(load_message)
+            else:
+                st.success(load_message)
 
 input_mode = st.radio("Force input source", ["Manual Input", "SAP2000 CSV Upload"], horizontal=True, key="input_mode")
 use_sap = input_mode == "SAP2000 CSV Upload"
