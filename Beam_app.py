@@ -369,8 +369,34 @@ for _k, _v in DEFAULT_APP_STATE.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
-
 def build_workspace_excel_bytes():
+    output = BytesIO()
+    
+    # 1. Extract values from session state using your default keys
+    app_state_row = {}
+    for key in DEFAULT_APP_STATE.keys():
+        val = st.session_state.get(key)
+        # Encode complex types (like lists or dicts) to JSON strings for Excel safety
+        if isinstance(val, (list, dict)):
+            app_state_row[key] = json.dumps(val)
+        else:
+            app_state_row[key] = val
+            
+    # 2. Convert to a single-row DataFrame (Wide Format)
+    app_state_df = pd.DataFrame([app_state_row])
+    
+    # 3. Write to Excel
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        app_state_df.to_excel(writer, sheet_name="app_state", index=False)
+        
+        # Keep your existing raw SAP data export logic
+        sap_json = st.session_state.get("sap_raw_json", "")
+        if sap_json:
+            sap_df = pd.read_json(BytesIO(sap_json.encode("utf-8")), orient="split")
+            sap_df.to_excel(writer, sheet_name="sap_raw_data", index=False)
+            
+    return output.getvalue()
+def build_workspace_excel_bytes2():
     output = BytesIO()
 
     def _encode_cell(value):
