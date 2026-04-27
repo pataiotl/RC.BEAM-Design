@@ -338,6 +338,19 @@ def normalize_option_value(key, value):
         raise ValueError(f"{key} must be one of {options}")
 
     text = str(value).strip()
+    if key == "bar_v_name" or key == "skin_bar_name" or key.startswith(("td", "bd")):
+        compact_text = re.sub(r"\s+", "", text).upper()
+        for option in options:
+            if compact_text == str(option).upper():
+                return option
+        diameter_match = re.search(r"\d+", compact_text)
+        if diameter_match:
+            diameter = int(diameter_match.group(0))
+            for option in options:
+                if int(re.search(r"\d+", str(option)).group(0)) == diameter:
+                    return option
+        raise ValueError(f"{key} must be one of {options}")
+
     aliases = {
         "manual": "Manual Input",
         "manual input": "Manual Input",
@@ -369,6 +382,18 @@ def serialize_editable_value(value):
     if value is None:
         return ""
     return value
+
+
+def get_first_present(row, candidate_names):
+    normalized = {
+        str(column).strip().lower().replace(" ", "_"): column
+        for column in row.index
+    }
+    for name in candidate_names:
+        column = normalized.get(name.strip().lower().replace(" ", "_"))
+        if column is not None:
+            return row[column]
+    return None
 
 
 def coerce_workspace_value(key, value):
@@ -416,6 +441,142 @@ def coerce_workspace_value(key, value):
     if minimum is not None and isinstance(coerced, (int, float)) and coerced < minimum:
         raise ValueError(f"{key} must be at least {minimum}")
     return normalize_option_value(key, coerced)
+
+
+PROJECT_INPUT_ROWS = [
+    ("Section and Materials", "Width b (mm)", "b"),
+    ("Section and Materials", "Total depth h (mm)", "h"),
+    ("Section and Materials", "Concrete fc' (MPa)", "fc"),
+    ("Section and Materials", "Main steel fy (MPa)", "fy"),
+    ("Section and Materials", "Concrete type lambda", "lambda_c"),
+    ("Transverse Steel", "Stirrup fy (MPa)", "fyt"),
+    ("Transverse Steel", "Stirrup size", "bar_v_name"),
+    ("Transverse Steel", "Stirrup legs", "n_legs"),
+    ("Transverse Steel", "Clear cover to stirrup (mm)", "cover_clear"),
+    ("Transverse Steel", "Minimum clear bar spacing (mm)", "clear_space"),
+    ("Skin Bars", "Skin bars/layer", "skin_bar_qty"),
+    ("Skin Bars", "Skin bar size", "skin_bar_name"),
+    ("Skin Bars", "Skin layers", "skin_layers"),
+]
+
+
+def build_project_input_dataframe(export_state):
+    rows = []
+    for group, label, key in PROJECT_INPUT_ROWS:
+        options = state_options_for_key(key)
+        rows.append(
+            {
+                "group": group,
+                "label": label,
+                "key": key,
+                "value": serialize_editable_value(export_state.get(key)),
+                "allowed_values": ", ".join(str(option) for option in options) if options else "",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_zone_reinforcement_dataframe(export_state):
+    rows = []
+    for zone in ZONES:
+        rows.extend(
+            [
+                {
+                    "zone": zone,
+                    "face": "Top",
+                    "layer": 1,
+                    "quantity_key": f"t1_{zone}",
+                    "quantity": export_state.get(f"t1_{zone}"),
+                    "bar_size_key": f"td1_{zone}",
+                    "bar_size": export_state.get(f"td1_{zone}"),
+                },
+                {
+                    "zone": zone,
+                    "face": "Top",
+                    "layer": 2,
+                    "quantity_key": f"t2_{zone}",
+                    "quantity": export_state.get(f"t2_{zone}"),
+                    "bar_size_key": f"td2_{zone}",
+                    "bar_size": export_state.get(f"td2_{zone}"),
+                },
+                {
+                    "zone": zone,
+                    "face": "Top",
+                    "layer": 3,
+                    "quantity_key": f"t3_{zone}",
+                    "quantity": export_state.get(f"t3_{zone}"),
+                    "bar_size_key": f"td3_{zone}",
+                    "bar_size": export_state.get(f"td3_{zone}"),
+                },
+                {
+                    "zone": zone,
+                    "face": "Bottom",
+                    "layer": 1,
+                    "quantity_key": f"b1_{zone}",
+                    "quantity": export_state.get(f"b1_{zone}"),
+                    "bar_size_key": f"bd1_{zone}",
+                    "bar_size": export_state.get(f"bd1_{zone}"),
+                },
+                {
+                    "zone": zone,
+                    "face": "Bottom",
+                    "layer": 2,
+                    "quantity_key": f"b2_{zone}",
+                    "quantity": export_state.get(f"b2_{zone}"),
+                    "bar_size_key": f"bd2_{zone}",
+                    "bar_size": export_state.get(f"bd2_{zone}"),
+                },
+                {
+                    "zone": zone,
+                    "face": "Bottom",
+                    "layer": 3,
+                    "quantity_key": f"b3_{zone}",
+                    "quantity": export_state.get(f"b3_{zone}"),
+                    "bar_size_key": f"bd3_{zone}",
+                    "bar_size": export_state.get(f"bd3_{zone}"),
+                },
+            ]
+        )
+    return pd.DataFrame(rows)
+
+
+def apply_project_input_dataframe(project_df):
+    if project_df.empty:
+        return
+    if "key" in project_df.columns and "value" in project_df.columns:
+        for _, row in project_df.iterrows():
+            key = str(row["key"]).strip()
+            if key in DEFAULT_APP_STATE:
+                st.session_state[key] = coerce_workspace_value(key, row["value"])
+        return
+
+    if "label" in project_df.columns and "value" in project_df.columns:
+        label_to_key = {
+            label.strip().lower(): key
+            for _, label, key in PROJECT_INPUT_ROWS
+        }
+        for _, row in project_df.iterrows():
+            label = str(row["label"]).strip().lower()
+            key = label_to_key.get(label)
+            if key:
+                st.session_state[key] = coerce_workspace_value(key, row["value"])
+
+
+def apply_zone_reinforcement_dataframe(zone_df):
+    if zone_df.empty:
+        return
+    for _, row in zone_df.iterrows():
+        qty_key = get_first_present(row, ["quantity_key"])
+        qty_value = get_first_present(row, ["quantity", "qty", "number"])
+        size_key = get_first_present(row, ["bar_size_key", "size_key"])
+        size_value = get_first_present(row, ["bar_size", "size", "diameter"])
+
+        if isinstance(qty_key, str) and qty_key.strip() in DEFAULT_APP_STATE and qty_value is not None:
+            key = qty_key.strip()
+            st.session_state[key] = coerce_workspace_value(key, qty_value)
+        if isinstance(size_key, str) and size_key.strip() in DEFAULT_APP_STATE and size_value is not None:
+            key = size_key.strip()
+            st.session_state[key] = coerce_workspace_value(key, size_value)
 
 
 def collect_workspace_state_for_export(active_input_mode=None, active_beam_length=None, active_forces=None):
@@ -503,6 +664,8 @@ def build_workspace_excel_bytes(active_input_mode, active_beam_length, active_fo
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         app_state_df.to_excel(writer, sheet_name="app_state", index=False)
+        build_project_input_dataframe(export_state).to_excel(writer, sheet_name="project_input_workspace", index=False)
+        build_zone_reinforcement_dataframe(export_state).to_excel(writer, sheet_name="zone_reinforcement", index=False)
 
         sap_json = st.session_state.get("sap_raw_json", "")
         if sap_json:
@@ -531,27 +694,33 @@ def build_workspace_excel_bytes(active_input_mode, active_beam_length, active_fo
 def load_workspace_excel(uploaded_excel):
     workbook = pd.ExcelFile(uploaded_excel)
     if "app_state" not in workbook.sheet_names:
-        raise ValueError("Missing app_state sheet")
-
-    app_state = pd.read_excel(workbook, sheet_name="app_state")
-    if app_state.empty:
-        raise ValueError("app_state sheet is empty")
-
-    if {"key", "value_json"}.issubset(app_state.columns):
-        for _, row in app_state.iterrows():
-            key = row["key"]
-            if key in DEFAULT_APP_STATE:
-                st.session_state[key] = coerce_workspace_value(key, json.loads(row["value_json"]))
-    elif {"key", "value"}.issubset(app_state.columns):
-        for _, row in app_state.iterrows():
-            key = str(row["key"]).strip()
-            if key in DEFAULT_APP_STATE:
-                st.session_state[key] = coerce_workspace_value(key, row["value"])
+        if "project_input_workspace" not in workbook.sheet_names and "zone_reinforcement" not in workbook.sheet_names:
+            raise ValueError("Missing app_state sheet")
     else:
-        first_row = app_state.iloc[0].to_dict()
-        for key in DEFAULT_APP_STATE:
-            if key in first_row:
-                st.session_state[key] = coerce_workspace_value(key, first_row[key])
+        app_state = pd.read_excel(workbook, sheet_name="app_state")
+        if app_state.empty:
+            raise ValueError("app_state sheet is empty")
+
+        if {"key", "value_json"}.issubset(app_state.columns):
+            for _, row in app_state.iterrows():
+                key = row["key"]
+                if key in DEFAULT_APP_STATE:
+                    st.session_state[key] = coerce_workspace_value(key, json.loads(row["value_json"]))
+        elif {"key", "value"}.issubset(app_state.columns):
+            for _, row in app_state.iterrows():
+                key = str(row["key"]).strip()
+                if key in DEFAULT_APP_STATE:
+                    st.session_state[key] = coerce_workspace_value(key, row["value"])
+        else:
+            first_row = app_state.iloc[0].to_dict()
+            for key in DEFAULT_APP_STATE:
+                if key in first_row:
+                    st.session_state[key] = coerce_workspace_value(key, first_row[key])
+
+    if "project_input_workspace" in workbook.sheet_names:
+        apply_project_input_dataframe(pd.read_excel(workbook, sheet_name="project_input_workspace"))
+    if "zone_reinforcement" in workbook.sheet_names:
+        apply_zone_reinforcement_dataframe(pd.read_excel(workbook, sheet_name="zone_reinforcement"))
 
     if "sap_raw_data" in workbook.sheet_names:
         sap_df = pd.read_excel(workbook, sheet_name="sap_raw_data")
