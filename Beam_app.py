@@ -806,6 +806,8 @@ beam_length = 6.0
 selected_frame = "Manual"
 selected_frame_label = "Manual"
 df = None
+design_input_valid = True
+design_input_error = ""
 
 
 def governing_value_and_combo(data, value_col, abs_col=None):
@@ -856,7 +858,9 @@ if use_sap:
                 else:
                     selected_frame = "No frame selected"
                     selected_frame_label = "Grouped frames"
-                    st.warning("Please select at least one frame to run grouped design.")
+                    design_input_valid = False
+                    design_input_error = "Please select at least one frame before running grouped design."
+                    st.warning(design_input_error)
 
             df = df_raw[df_raw["Frame"].astype(str).isin(selected_frames)].copy() if selected_frames else pd.DataFrame()
             if "OutputCase" not in df.columns:
@@ -979,8 +983,20 @@ with col_rebar:
             bar_selections[zone] = {"top_d1": top_d, "bot_d1": bot_d}
 
 st.markdown("<div class='section-band'>Run Design</div>", unsafe_allow_html=True)
-if st.button("Run full 3-zone detailing design", type="primary", use_container_width=True):
+run_design = st.button(
+    "Run full 3-zone detailing design",
+    type="primary",
+    use_container_width=True,
+    disabled=not design_input_valid,
+)
+if run_design and design_input_valid:
     st.session_state["design_results_visible"] = True
+elif run_design and not design_input_valid:
+    st.session_state["design_results_visible"] = False
+
+if not design_input_valid and design_input_error:
+    st.session_state["design_results_visible"] = False
+    st.error(design_input_error)
 
 if st.session_state.get("design_results_visible", False):
     pdf_zone_data = {}
