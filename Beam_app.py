@@ -1,6 +1,8 @@
 import math
 import os
 import tempfile
+import json
+from io import BytesIO
 from dataclasses import dataclass
 
 import matplotlib.patches as patches
@@ -196,6 +198,126 @@ class RebarGroup:
     extreme_fiber: float
     width_req: float
     layers: list
+
+
+DEFAULT_APP_STATE = {
+    "input_mode": "Manual Input",
+    "beam_length": 6.0,
+    "mu_left": 200.0,
+    "vu_left": 150.0,
+    "tu_left": 0.0,
+    "mu_mid": 180.0,
+    "vu_mid": 60.0,
+    "tu_mid": 0.0,
+    "mu_right": 220.0,
+    "vu_right": 155.0,
+    "tu_right": 0.0,
+    "b": 300,
+    "h": 600,
+    "fc": 35,
+    "fy": 500,
+    "lambda_c": 1.0,
+    "fyt": 400,
+    "bar_v_name": "DB10",
+    "n_legs": 2,
+    "cover_clear": 40,
+    "clear_space": 25,
+    "skin_bar_qty": 2,
+    "skin_bar_name": "DB12",
+    "skin_layers": 2,
+    "grouping_mode": "Single frame",
+    "selected_frame_single": "Manual",
+    "selected_frames_group": [],
+    "design_results_visible": False,
+    "sap_raw_json": "",
+}
+for _zone in ["Left", "Mid", "Right"]:
+    _defaults = {"Left": (4, 2), "Mid": (2, 4), "Right": (4, 2)}[_zone]
+    DEFAULT_APP_STATE.update(
+        {
+            f"t1_{_zone}": _defaults[0],
+            f"td1_{_zone}": "DB25",
+            f"t2_{_zone}": 0,
+            f"td2_{_zone}": "DB20",
+            f"t3_{_zone}": 0,
+            f"td3_{_zone}": "DB20",
+            f"b1_{_zone}": _defaults[1],
+            f"bd1_{_zone}": "DB25",
+            f"b2_{_zone}": 0,
+            f"bd2_{_zone}": "DB20",
+            f"b3_{_zone}": 0,
+            f"bd3_{_zone}": "DB20",
+        }
+    )
+
+for _k, _v in DEFAULT_APP_STATE.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+
+def build_workspace_excel_bytes():
+    output = BytesIO()
+
+    def _encode_cell(value):
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return f"__json__:{json.dumps(value)}"
+
+    app_state_row = {k: _encode_cell(st.session_state.get(k)) for k in DEFAULT_APP_STATE.keys()}
+    app_state_df = pd.DataFrame([app_state_row])
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        app_state_df.to_excel(writer, sheet_name="app_state", index=False)
+        sap_json = st.session_state.get("sap_raw_json", "")
+        if sap_json:
+            sap_df = pd.read_json(BytesIO(sap_json.encode("utf-8")), orient="split")
+            sap_df.to_excel(writer, sheet_name="sap_raw_data", index=False)
+
+        design_summary = st.session_state.get("last_design_summary", [])
+        if design_summary:
+            pd.DataFrame(design_summary).to_excel(writer, sheet_name="design_summary", index=False)
+
+        design_zone_results = st.session_state.get("last_design_zone_results", {})
+        if design_zone_results:
+            zone_rows = []
+            for zone, data in design_zone_results.items():
+                if data is None:
+                    zone_rows.append({"Zone": zone, "Status": "Design aborted (bar fit issue)"})
+                else:
+                    row = {"Zone": zone}
+                    row.update(data)
+                    zone_rows.append(row)
+            pd.DataFrame(zone_rows).to_excel(writer, sheet_name="zone_results", index=False)
+    return output.getvalue()
+
+
+def load_workspace_excel(uploaded_excel):
+    def _decode_cell(value):
+        if isinstance(value, str) and value.startswith("__json__:"):
+            return json.loads(value[len("__json__:") :])
+        return value
+
+    workbook = pd.ExcelFile(uploaded_excel)
+    if "app_state" not in workbook.sheet_names:
+        raise ValueError("Missing app_state sheet")
+    app_state = pd.read_excel(workbook, sheet_name="app_state")
+
+    # Backward compatibility: old two-column layout (key, value_json)
+    if {"key", "value_json"}.issubset(app_state.columns):
+        for _, row in app_state.iterrows():
+            if row["key"] in DEFAULT_APP_STATE:
+                st.session_state[row["key"]] = json.loads(row["value_json"])
+    else:
+        if app_state.empty:
+            raise ValueError("app_state sheet is empty")
+        first_row = app_state.iloc[0].to_dict()
+        for key in DEFAULT_APP_STATE.keys():
+            if key in first_row:
+                st.session_state[key] = _decode_cell(first_row[key])
+
+    if "sap_raw_data" in workbook.sheet_names:
+        sap_df = pd.read_excel(workbook, sheet_name="sap_raw_data")
+        st.session_state["sap_raw_json"] = sap_df.to_json(orient="split")
 
 
 def get_rebar_group(n1, dia1, n2, dia2, n3, dia3, cover_clear, tie_dia, clear_space_input=25):
@@ -794,7 +916,25 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-input_mode = st.radio("Force input source", ["Manual Input", "SAP2000 CSV Upload"], horizontal=True)
+with st.expander("Save / Load Full Workspace"):
+    workspace_bytes = build_workspace_excel_bytes()
+    st.download_button(
+        "Save full workspace (.xlsx)",
+        data=workspace_bytes,
+        file_name="rc_beam_workspace.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Includes all keyed inputs plus SAP frame-force rows (if available).",
+    )
+    uploaded_workspace = st.file_uploader("Load full workspace (.xlsx)", type=["xlsx"], key="workspace_loader")
+    if uploaded_workspace is not None:
+        try:
+            load_workspace_excel(uploaded_workspace)
+            st.success("Workspace loaded. Inputs and SAP data restored.")
+            st.rerun()
+        except Exception:
+            st.error("Could not read workspace Excel file. Please upload a valid .xlsx file generated by this app.")
+
+input_mode = st.radio("Force input source", ["Manual Input", "SAP2000 CSV Upload"], horizontal=True, key="input_mode")
 use_sap = input_mode == "SAP2000 CSV Upload"
 
 forces = {"Left": {"M": 0.0, "V": 0.0, "T": 0.0}, "Mid": {"M": 0.0, "V": 0.0, "T": 0.0}, "Right": {"M": 0.0, "V": 0.0, "T": 0.0}}
@@ -823,6 +963,14 @@ if use_sap:
     uploaded_file = st.file_uploader("Upload SAP2000 frame-forces CSV", type=["csv"])
     if uploaded_file is not None:
         df_raw = pd.read_csv(uploaded_file)
+        st.session_state["sap_raw_json"] = df_raw.to_json(orient="split")
+    elif st.session_state.get("sap_raw_json"):
+        df_raw = pd.read_json(BytesIO(st.session_state["sap_raw_json"].encode("utf-8")), orient="split")
+        st.info("Using SAP force data restored from the workspace file.")
+    else:
+        df_raw = None
+
+    if df_raw is not None:
         if "Frame" in df_raw.columns and str(df_raw["Frame"].iloc[0]).strip().lower() == "text":
             df_raw = df_raw.drop(0).reset_index(drop=True)
         for col in ["Station", "P", "V2", "V3", "T", "M2", "M3"]:
@@ -836,18 +984,22 @@ if use_sap:
                 "Frame design mode",
                 ["Single frame", "Grouped frames (envelope)"],
                 horizontal=True,
+                key="grouping_mode",
                 help="Grouped mode lets you design multiple similar beams at once using governing envelope forces.",
             )
 
             if grouping_mode == "Single frame":
-                selected_frame = st.selectbox("Select beam frame", available_frames)
+                default_idx = available_frames.index(st.session_state["selected_frame_single"]) if st.session_state["selected_frame_single"] in available_frames else 0
+                selected_frame = st.selectbox("Select beam frame", available_frames, index=default_idx, key="selected_frame_single")
                 selected_frames = [selected_frame]
                 selected_frame_label = selected_frame
             else:
+                default_group = [f for f in st.session_state["selected_frames_group"] if f in available_frames]
                 selected_frames = st.multiselect(
                     "Select frames to group",
                     available_frames,
-                    default=available_frames[: min(2, len(available_frames))],
+                    default=default_group if default_group else available_frames[: min(2, len(available_frames))],
+                    key="selected_frames_group",
                     help="Pick beams with similar section/detailing intent. App will design for the worst force effects among the selected beams.",
                 )
                 if selected_frames:
@@ -881,16 +1033,15 @@ if use_sap:
         st.info("Upload a SAP2000 CSV file to begin.")
 else:
     st.markdown("<div class='section-band'>Manual Force Input</div>", unsafe_allow_html=True)
-    beam_length = st.number_input("Beam span L (m)", value=6.0, step=0.5, min_value=1.0)
+    beam_length = st.number_input("Beam span L (m)", step=0.5, min_value=1.0, key="beam_length")
     st.info(f"ACI deflection h_min note: about {beam_length * 1000 / 18.5:.1f} mm for one-end-continuous. Adjust for actual end conditions.")
     c1, c2, c3 = st.columns(3)
-    defaults = {"Left": (200.0, 150.0, 0.0), "Mid": (180.0, 60.0, 0.0), "Right": (220.0, 155.0, 0.0)}
     for col, zone in zip([c1, c2, c3], ["Left", "Mid", "Right"]):
         with col:
             st.subheader(zone)
-            forces[zone]["M"] = st.number_input(f"Mu {zone} (kNm)", value=defaults[zone][0], step=5.0, min_value=0.0)
-            forces[zone]["V"] = st.number_input(f"Vu {zone} (kN)", value=defaults[zone][1], step=5.0, min_value=0.0)
-            forces[zone]["T"] = st.number_input(f"Tu {zone} (kNm)", value=defaults[zone][2], step=1.0, min_value=0.0)
+            forces[zone]["M"] = st.number_input(f"Mu {zone} (kNm)", step=5.0, min_value=0.0, key=f"mu_{zone.lower()}")
+            forces[zone]["V"] = st.number_input(f"Vu {zone} (kN)", step=5.0, min_value=0.0, key=f"vu_{zone.lower()}")
+            forces[zone]["T"] = st.number_input(f"Tu {zone} (kNm)", step=1.0, min_value=0.0, key=f"tu_{zone.lower()}")
 
 st.markdown("<div class='section-band'>Bending and Shear Diagram</div>", unsafe_allow_html=True)
 force_fig = draw_force_diagrams(forces, beam_length, df=df, selected_frame=selected_frame_label)
@@ -902,40 +1053,40 @@ col_prop, col_rebar = st.columns([1, 2])
 
 with col_prop:
     st.subheader("Section and Materials")
-    b = st.number_input("Width b (mm)", value=300, step=50, min_value=150)
-    h = st.number_input("Total depth h (mm)", value=600, step=50, min_value=200)
-    fc = st.number_input("Concrete fc' (MPa)", value=35, step=5, min_value=20)
-    fy = st.number_input("Main steel fy (MPa)", value=500, step=10, min_value=300)
-    lambda_c = st.selectbox("Concrete type lambda", [1.0, 0.85, 0.75], format_func=lambda x: {1.0: "1.0 Normal weight", 0.85: "0.85 Sand-lightweight", 0.75: "0.75 All-lightweight"}[x])
+    b = st.number_input("Width b (mm)", step=50, min_value=150, key="b")
+    h = st.number_input("Total depth h (mm)", step=50, min_value=200, key="h")
+    fc = st.number_input("Concrete fc' (MPa)", step=5, min_value=20, key="fc")
+    fy = st.number_input("Main steel fy (MPa)", step=10, min_value=300, key="fy")
+    lambda_c = st.selectbox("Concrete type lambda", [1.0, 0.85, 0.75], key="lambda_c", format_func=lambda x: {1.0: "1.0 Normal weight", 0.85: "0.85 Sand-lightweight", 0.75: "0.75 All-lightweight"}[x])
     st.subheader("Transverse Steel")
-    fyt = st.number_input("Stirrup fy (MPa)", value=400, step=10, min_value=240)
+    fyt = st.number_input("Stirrup fy (MPa)", step=10, min_value=240, key="fyt")
     bar_v_options = {"RB9": 9, "DB10": 10, "DB12": 12, "DB16": 16}
-    bar_v_name = st.selectbox("Stirrup size", list(bar_v_options.keys()), index=1)
+    bar_v_name = st.selectbox("Stirrup size", list(bar_v_options.keys()), key="bar_v_name")
     bar_v = bar_v_options[bar_v_name]
-    n_legs = st.number_input("Stirrup legs", min_value=2, value=2, step=1)
-    cover_clear = st.number_input("Clear cover to stirrup (mm)", value=40, step=5, min_value=20)
-    clear_space = st.number_input("Minimum clear bar spacing (mm)", value=25, step=5, min_value=20)
+    n_legs = st.number_input("Stirrup legs", min_value=2, step=1, key="n_legs")
+    cover_clear = st.number_input("Clear cover to stirrup (mm)", step=5, min_value=20, key="cover_clear")
+    clear_space = st.number_input("Minimum clear bar spacing (mm)", step=5, min_value=20, key="clear_space")
     st.subheader("Skin Bars")
     skin_bar_options = {"DB10": 10, "DB12": 12, "DB16": 16, "DB20": 20}
     skin_c1, skin_c2, skin_c3 = st.columns(3)
     skin_bar_qty = skin_c1.number_input(
         "Skin bars/layer",
         min_value=0,
-        value=2,
         step=1,
+        key="skin_bar_qty",
         help="Example: 2 with DB12 means 2-DB12 total per layer: one bar on each side face.",
     )
     skin_bar_name = skin_c2.selectbox(
         "Skin bar size",
         list(skin_bar_options.keys()),
-        index=1,
+        key="skin_bar_name",
         help="ACI side-face longitudinal reinforcement is checked when overall beam depth exceeds 900 mm.",
     )
     skin_layers = skin_c3.number_input(
         "Skin layers",
         min_value=1,
-        value=2,
         step=1,
+        key="skin_layers",
         help="Example: 2 layers of 2-DB12 side-face bars.",
     )
     skin_bar_dia = skin_bar_options[skin_bar_name]
@@ -948,25 +1099,23 @@ with col_rebar:
     bar_selections = {}
     for i, zone in enumerate(["Left", "Mid", "Right"]):
         with tabs[i]:
-            def_t = 4 if zone in ["Left", "Right"] else 2
-            def_b = 4 if zone == "Mid" else 2
             top_col, bot_col = st.columns(2)
             with top_col:
                 st.markdown("**Top bars**")
-                t_n1 = st.number_input("Top L1 n", 0, value=def_t, key=f"t1_{zone}")
-                t_d1_name = st.selectbox("Top L1 size", list(bar_opts.keys()), index=3, key=f"td1_{zone}")
-                t_n2 = st.number_input("Top L2 n", 0, value=0, key=f"t2_{zone}")
-                t_d2_name = st.selectbox("Top L2 size", list(bar_opts.keys()), index=2, key=f"td2_{zone}")
-                t_n3 = st.number_input("Top L3 n", 0, value=0, key=f"t3_{zone}")
-                t_d3_name = st.selectbox("Top L3 size", list(bar_opts.keys()), index=2, key=f"td3_{zone}")
+                t_n1 = st.number_input("Top L1 n", min_value=0, step=1, key=f"t1_{zone}")
+                t_d1_name = st.selectbox("Top L1 size", list(bar_opts.keys()), key=f"td1_{zone}")
+                t_n2 = st.number_input("Top L2 n", min_value=0, step=1, key=f"t2_{zone}")
+                t_d2_name = st.selectbox("Top L2 size", list(bar_opts.keys()), key=f"td2_{zone}")
+                t_n3 = st.number_input("Top L3 n", min_value=0, step=1, key=f"t3_{zone}")
+                t_d3_name = st.selectbox("Top L3 size", list(bar_opts.keys()), key=f"td3_{zone}")
             with bot_col:
                 st.markdown("**Bottom bars**")
-                b_n1 = st.number_input("Bottom L1 n", 0, value=def_b, key=f"b1_{zone}")
-                b_d1_name = st.selectbox("Bottom L1 size", list(bar_opts.keys()), index=3, key=f"bd1_{zone}")
-                b_n2 = st.number_input("Bottom L2 n", 0, value=0, key=f"b2_{zone}")
-                b_d2_name = st.selectbox("Bottom L2 size", list(bar_opts.keys()), index=2, key=f"bd2_{zone}")
-                b_n3 = st.number_input("Bottom L3 n", 0, value=0, key=f"b3_{zone}")
-                b_d3_name = st.selectbox("Bottom L3 size", list(bar_opts.keys()), index=2, key=f"bd3_{zone}")
+                b_n1 = st.number_input("Bottom L1 n", min_value=0, step=1, key=f"b1_{zone}")
+                b_d1_name = st.selectbox("Bottom L1 size", list(bar_opts.keys()), key=f"bd1_{zone}")
+                b_n2 = st.number_input("Bottom L2 n", min_value=0, step=1, key=f"b2_{zone}")
+                b_d2_name = st.selectbox("Bottom L2 size", list(bar_opts.keys()), key=f"bd2_{zone}")
+                b_n3 = st.number_input("Bottom L3 n", min_value=0, step=1, key=f"b3_{zone}")
+                b_d3_name = st.selectbox("Bottom L3 size", list(bar_opts.keys()), key=f"bd3_{zone}")
             t_d1, t_d2, t_d3 = bar_opts[t_d1_name], bar_opts[t_d2_name], bar_opts[t_d3_name]
             b_d1, b_d2, b_d3 = bar_opts[b_d1_name], bar_opts[b_d2_name], bar_opts[b_d3_name]
             rebar_data[zone] = {
@@ -1223,9 +1372,14 @@ if st.session_state.get("design_results_visible", False):
     if summary_rows:
         st.markdown("<div class='section-band'>Design Summary Table</div>", unsafe_allow_html=True)
         st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+        st.session_state["last_design_summary"] = summary_rows
+        st.session_state["last_design_zone_results"] = pdf_zone_data
         pdf_bytes = create_pdf_report(b, h, fc, fy, fyt, selected_frame_label, pdf_zone_data, input_mode)
         safe_name = selected_frame_label.replace(" ", "_").replace(",", "_")
         st.download_button("Download PDF calculation report", data=pdf_bytes, file_name=f"Beam_{safe_name}_Report.pdf", mime="application/pdf", type="primary")
+    else:
+        st.session_state["last_design_summary"] = []
+        st.session_state["last_design_zone_results"] = {}
 
 st.markdown(
     """
