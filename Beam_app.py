@@ -315,6 +315,309 @@ def load_workspace_excel(uploaded_excel):
         st.session_state["sap_raw_json"] = sap_df.to_json(orient="split")
 
 
+DEFAULT_APP_STATE = {
+    "input_mode": "Manual Input",
+    "beam_length": 6.0,
+    "mu_left": 200.0,
+    "vu_left": 150.0,
+    "tu_left": 0.0,
+    "mu_mid": 180.0,
+    "vu_mid": 60.0,
+    "tu_mid": 0.0,
+    "mu_right": 220.0,
+    "vu_right": 155.0,
+    "tu_right": 0.0,
+    "b": 300,
+    "h": 600,
+    "fc": 35,
+    "fy": 500,
+    "lambda_c": 1.0,
+    "fyt": 400,
+    "bar_v_name": "DB10",
+    "n_legs": 2,
+    "cover_clear": 40,
+    "clear_space": 25,
+    "skin_bar_qty": 2,
+    "skin_bar_name": "DB12",
+    "skin_layers": 2,
+    "grouping_mode": "Single frame",
+    "selected_frame_single": "Manual",
+    "selected_frames_group": [],
+    "design_results_visible": False,
+    "sap_raw_json": "",
+}
+for _zone in ["Left", "Mid", "Right"]:
+    _defaults = {"Left": (4, 2), "Mid": (2, 4), "Right": (4, 2)}[_zone]
+    DEFAULT_APP_STATE.update(
+        {
+            f"t1_{_zone}": _defaults[0],
+            f"td1_{_zone}": "DB25",
+            f"t2_{_zone}": 0,
+            f"td2_{_zone}": "DB20",
+            f"t3_{_zone}": 0,
+            f"td3_{_zone}": "DB20",
+            f"b1_{_zone}": _defaults[1],
+            f"bd1_{_zone}": "DB25",
+            f"b2_{_zone}": 0,
+            f"bd2_{_zone}": "DB20",
+            f"b3_{_zone}": 0,
+            f"bd3_{_zone}": "DB20",
+        }
+    )
+
+for _k, _v in DEFAULT_APP_STATE.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+
+def build_workspace_excel_bytes():
+    output = BytesIO()
+
+    def _encode_cell(value):
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return f"__json__:{json.dumps(value)}"
+
+    app_state_row = {k: _encode_cell(st.session_state.get(k)) for k in DEFAULT_APP_STATE.keys()}
+    app_state_df = pd.DataFrame([app_state_row])
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        app_state_df.to_excel(writer, sheet_name="app_state", index=False)
+        sap_json = st.session_state.get("sap_raw_json", "")
+        if sap_json:
+            sap_df = pd.read_json(BytesIO(sap_json.encode("utf-8")), orient="split")
+            sap_df.to_excel(writer, sheet_name="sap_raw_data", index=False)
+
+        design_summary = st.session_state.get("last_design_summary", [])
+        if design_summary:
+            pd.DataFrame(design_summary).to_excel(writer, sheet_name="design_summary", index=False)
+
+        design_zone_results = st.session_state.get("last_design_zone_results", {})
+        if design_zone_results:
+            zone_rows = []
+            for zone, data in design_zone_results.items():
+                if data is None:
+                    zone_rows.append({"Zone": zone, "Status": "Design aborted (bar fit issue)"})
+                else:
+                    row = {"Zone": zone}
+                    row.update(data)
+                    zone_rows.append(row)
+            pd.DataFrame(zone_rows).to_excel(writer, sheet_name="zone_results", index=False)
+    return output.getvalue()
+
+
+def load_workspace_excel(uploaded_excel):
+    def _decode_cell(value):
+        if isinstance(value, str) and value.startswith("__json__:"):
+            return json.loads(value[len("__json__:") :])
+        return value
+
+    workbook = pd.ExcelFile(uploaded_excel)
+    if "app_state" not in workbook.sheet_names:
+        raise ValueError("Missing app_state sheet")
+    app_state = pd.read_excel(workbook, sheet_name="app_state")
+
+    # Backward compatibility: old two-column layout (key, value_json)
+    if {"key", "value_json"}.issubset(app_state.columns):
+        for _, row in app_state.iterrows():
+            if row["key"] in DEFAULT_APP_STATE:
+                st.session_state[row["key"]] = json.loads(row["value_json"])
+    else:
+        if app_state.empty:
+            raise ValueError("app_state sheet is empty")
+        first_row = app_state.iloc[0].to_dict()
+        for key in DEFAULT_APP_STATE.keys():
+            if key in first_row:
+                st.session_state[key] = _decode_cell(first_row[key])
+
+    if "sap_raw_data" in workbook.sheet_names:
+        sap_df = pd.read_excel(workbook, sheet_name="sap_raw_data")
+        st.session_state["sap_raw_json"] = sap_df.to_json(orient="split")
+
+
+DEFAULT_APP_STATE = {
+    "input_mode": "Manual Input",
+    "beam_length": 6.0,
+    "mu_left": 200.0,
+    "vu_left": 150.0,
+    "tu_left": 0.0,
+    "mu_mid": 180.0,
+    "vu_mid": 60.0,
+    "tu_mid": 0.0,
+    "mu_right": 220.0,
+    "vu_right": 155.0,
+    "tu_right": 0.0,
+    "b": 300,
+    "h": 600,
+    "fc": 35,
+    "fy": 500,
+    "lambda_c": 1.0,
+    "fyt": 400,
+    "bar_v_name": "DB10",
+    "n_legs": 2,
+    "cover_clear": 40,
+    "clear_space": 25,
+    "skin_bar_qty": 2,
+    "skin_bar_name": "DB12",
+    "skin_layers": 2,
+    "grouping_mode": "Single frame",
+    "selected_frame_single": "Manual",
+    "selected_frames_group": [],
+    "design_results_visible": False,
+    "sap_raw_json": "",
+}
+for _zone in ["Left", "Mid", "Right"]:
+    _defaults = {"Left": (4, 2), "Mid": (2, 4), "Right": (4, 2)}[_zone]
+    DEFAULT_APP_STATE.update(
+        {
+            f"t1_{_zone}": _defaults[0],
+            f"td1_{_zone}": "DB25",
+            f"t2_{_zone}": 0,
+            f"td2_{_zone}": "DB20",
+            f"t3_{_zone}": 0,
+            f"td3_{_zone}": "DB20",
+            f"b1_{_zone}": _defaults[1],
+            f"bd1_{_zone}": "DB25",
+            f"b2_{_zone}": 0,
+            f"bd2_{_zone}": "DB20",
+            f"b3_{_zone}": 0,
+            f"bd3_{_zone}": "DB20",
+        }
+    )
+
+for _k, _v in DEFAULT_APP_STATE.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+
+def build_workspace_excel_bytes():
+    output = BytesIO()
+    app_state_df = pd.DataFrame(
+        [{"key": k, "value_json": json.dumps(st.session_state.get(k))} for k in DEFAULT_APP_STATE.keys()]
+    )
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        app_state_df.to_excel(writer, sheet_name="app_state", index=False)
+        sap_json = st.session_state.get("sap_raw_json", "")
+        if sap_json:
+            sap_df = pd.read_json(BytesIO(sap_json.encode("utf-8")), orient="split")
+            sap_df.to_excel(writer, sheet_name="sap_raw_data", index=False)
+    return output.getvalue()
+
+
+def load_workspace_excel(uploaded_excel):
+    workbook = pd.ExcelFile(uploaded_excel)
+    if "app_state" not in workbook.sheet_names:
+        raise ValueError("Missing app_state sheet")
+    app_state = pd.read_excel(workbook, sheet_name="app_state")
+    for _, row in app_state.iterrows():
+        if row["key"] in DEFAULT_APP_STATE:
+            st.session_state[row["key"]] = json.loads(row["value_json"])
+    if "sap_raw_data" in workbook.sheet_names:
+        sap_df = pd.read_excel(workbook, sheet_name="sap_raw_data")
+        st.session_state["sap_raw_json"] = sap_df.to_json(orient="split")
+
+
+DEFAULT_APP_STATE = {
+    "input_mode": "Manual Input",
+    "beam_length": 6.0,
+    "mu_left": 200.0,
+    "vu_left": 150.0,
+    "tu_left": 0.0,
+    "mu_mid": 180.0,
+    "vu_mid": 60.0,
+    "tu_mid": 0.0,
+    "mu_right": 220.0,
+    "vu_right": 155.0,
+    "tu_right": 0.0,
+    "b": 300,
+    "h": 600,
+    "fc": 35,
+    "fy": 500,
+    "lambda_c": 1.0,
+    "fyt": 400,
+    "bar_v_name": "DB10",
+    "n_legs": 2,
+    "cover_clear": 40,
+    "clear_space": 25,
+    "skin_bar_qty": 2,
+    "skin_bar_name": "DB12",
+    "skin_layers": 2,
+    "grouping_mode": "Single frame",
+    "selected_frame_single": "Manual",
+    "selected_frames_group": [],
+    "design_results_visible": False,
+    "sap_raw_json": "",
+}
+for _zone in ["Left", "Mid", "Right"]:
+    _defaults = {"Left": (4, 2), "Mid": (2, 4), "Right": (4, 2)}[_zone]
+    DEFAULT_APP_STATE.update(
+        {
+            f"t1_{_zone}": _defaults[0],
+            f"td1_{_zone}": "DB25",
+            f"t2_{_zone}": 0,
+            f"td2_{_zone}": "DB20",
+            f"t3_{_zone}": 0,
+            f"td3_{_zone}": "DB20",
+            f"b1_{_zone}": _defaults[1],
+            f"bd1_{_zone}": "DB25",
+            f"b2_{_zone}": 0,
+            f"bd2_{_zone}": "DB20",
+            f"b3_{_zone}": 0,
+            f"bd3_{_zone}": "DB20",
+        }
+    )
+
+for _k, _v in DEFAULT_APP_STATE.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+
+def build_workspace_db_bytes():
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_db:
+        tmp_path = tmp_db.name
+    conn = sqlite3.connect(tmp_path)
+    try:
+        conn.execute("CREATE TABLE app_state (key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        rows = [(k, json.dumps(st.session_state.get(k))) for k in DEFAULT_APP_STATE.keys()]
+        conn.executemany("INSERT INTO app_state (key, value_json) VALUES (?, ?)", rows)
+        sap_json = st.session_state.get("sap_raw_json", "")
+        if sap_json:
+            sap_df = pd.read_json(BytesIO(sap_json.encode("utf-8")), orient="split")
+            sap_df.to_sql("sap_raw_data", conn, if_exists="replace", index=False)
+    finally:
+        conn.commit()
+        conn.close()
+    with open(tmp_path, "rb") as db_file:
+        db_bytes = db_file.read()
+    try:
+        os.remove(tmp_path)
+    except OSError:
+        pass
+    return db_bytes
+
+
+def load_workspace_db(uploaded_db):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_db:
+        tmp_db.write(uploaded_db.getvalue())
+        tmp_path = tmp_db.name
+    conn = sqlite3.connect(tmp_path)
+    try:
+        app_state = pd.read_sql_query("SELECT key, value_json FROM app_state", conn)
+        for _, row in app_state.iterrows():
+            if row["key"] in DEFAULT_APP_STATE:
+                st.session_state[row["key"]] = json.loads(row["value_json"])
+        tables = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table'", conn)["name"].tolist()
+        if "sap_raw_data" in tables:
+            sap_df = pd.read_sql_query("SELECT * FROM sap_raw_data", conn)
+            st.session_state["sap_raw_json"] = sap_df.to_json(orient="split")
+    finally:
+        conn.close()
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
 def get_rebar_group(n1, dia1, n2, dia2, n3, dia3, cover_clear, tie_dia, clear_space_input=25):
     if (n1 + n2 + n3) == 0:
         return RebarGroup(0.0, 0.0, 0.0, 0.0, [])
