@@ -1756,8 +1756,14 @@ if st.session_state.get("design_results_visible", False):
             
             # 2. Stirrup UI (Cares about combined worst-case dc_shear)
             stirrup_ui = "pass" if shear_ok else "fail"
-            # Always show the combined D/C ratio, even when failing
-            stirrup_label = f"@ {res_shear['final_s']} mm | D/C {dc_shear}"
+            
+            # Explicit Web Crushing / Overstress Check
+            if res_shear.get("section_fails", False):
+                stirrup_value = "OVERSTRESSED"
+                stirrup_label = f"REVISE SECTION | D/C {dc_shear}"
+            else:
+                stirrup_value = f"{n_legs}-{bar_v_name}"
+                stirrup_label = f"@ {res_shear['final_s']} mm | D/C {dc_shear}"
 
             strain_ui = "pass" if res_flex["strain_class"] == "Tension-controlled" else ("warn" if res_flex["strain_class"] == "Transition zone" else "fail")
 
@@ -1765,11 +1771,10 @@ if st.session_state.get("design_results_visible", False):
             with m1:
                 mini_metric("phi Mn", f"{res_flex['phi_Mn']} kNm", f"{m_combo} | D/C {dc_flex}", status=flex_ui, extra_class="three-zone-scale")
             with m2:
-                # This card now correctly shows ONLY pure shear D/C
                 mini_metric("phi Vn", f"{res_shear['phi_Vn']} kN", f"{v_combo} | D/C {dc_pure_shear_rounded}", status=shear_ui, extra_class="three-zone-scale")
             with m3:
-                # This card now displays the combined shear+torsion D/C ratio, turning red on fail
-                mini_metric("Stirrups", f"{n_legs}-{bar_v_name}", stirrup_label, status=stirrup_ui, extra_class="three-zone-scale")
+                # This card now swaps to "OVERSTRESSED" and "REVISE SECTION" if web crushing governs
+                mini_metric("Stirrups", stirrup_value, stirrup_label, status=stirrup_ui, extra_class="three-zone-scale")
             with m4:
                 mini_metric("Strain", f"{res_flex['eps_t']}", res_flex["strain_class"], status=strain_ui, extra_class="three-zone-scale")
 
