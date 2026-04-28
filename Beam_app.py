@@ -1717,7 +1717,19 @@ if st.session_state.get("design_results_visible", False):
             dev_bot = calculate_development_length(bot_bar_dia, fy, fc, False, cover_clear, clear_space, lambda_c)
 
             dc_flex = round(Mu / res_flex["phi_Mn"], 2) if res_flex["phi_Mn"] > 0 else 999.9
-            dc_shear = round(Vu_design / res_shear["phi_Vn"], 2) if res_shear.get("phi_Vn", 0) > 0 else 999.9
+            
+            # --- TRUE WORST-CASE STIRRUP D/C CALCULATION ---
+            # 1. Pure Shear D/C
+            dc_pure_shear = Vu_design / res_shear["phi_Vn"] if res_shear.get("phi_Vn", 0) > 0 else 999.9
+            
+            # 2. Web Crushing D/C (Combined shear and torsion stress limit)
+            dc_web_crushing = res_shear["combined_stress"] / res_shear["stress_limit"] if res_shear.get("stress_limit", 0) > 0 else 999.9
+            
+            # 3. Combined Steel & Spacing D/C (Provided Spacing / Required Spacing)
+            dc_spacing = res_shear["final_s"] / res_shear["s_exact"] if res_shear.get("s_exact", 0) > 0 else 999.9
+            
+            # The UI will display the governing (maximum) D/C ratio
+            dc_shear = round(max(dc_pure_shear, dc_web_crushing, dc_spacing), 2)
 
             flex_ok = (
                 res_flex["converged"]
