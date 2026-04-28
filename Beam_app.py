@@ -1651,22 +1651,22 @@ if st.session_state.get("design_results_visible", False):
     font-size: calc(9px * {RESULTS_FONT_SCALE});
 }}
 .three-zone-scale.mini-metric-label {{
-    font-size: calc(5.5px * {RESULTS_FONT_SCALE} * 1.20);
+    font-size: calc(5.5px * {RESULTS_FONT_SCALE} * 1.25);
 }}
 .three-zone-scale.mini-metric-value {{
-    font-size: calc(12px * {RESULTS_FONT_SCALE} * 1.20);
+    font-size: calc(12px * {RESULTS_FONT_SCALE} * 1.25);
 }}
 .three-zone-scale.mini-metric-delta {{
-    font-size: calc(5.5px * {RESULTS_FONT_SCALE} * 1.20);
+    font-size: calc(5.5px * {RESULTS_FONT_SCALE} * 1.25);
 }}
 .three-zone-scale.check-row {{
-    font-size: calc(14px * {RESULTS_FONT_SCALE});
+    font-size: calc(14px * {RESULTS_FONT_SCALE} * 0.75);
 }}
 .three-zone-scale.check-detail {{
-    font-size: calc(12px * {RESULTS_FONT_SCALE});
+    font-size: calc(12px * {RESULTS_FONT_SCALE} * 0.75);
 }}
 .three-zone-scale.badge {{
-    font-size: calc(11px * {RESULTS_FONT_SCALE});
+    font-size: calc(11px * {RESULTS_FONT_SCALE} * 0.75);
 }}
 </style>
         """,
