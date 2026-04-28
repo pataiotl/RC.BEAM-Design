@@ -46,6 +46,7 @@ def build_default_app_state():
         "n_legs": 2,
         "cover_clear": 40,
         "clear_space": 25,
+        "stirrup_spacing": 150,
         "skin_bar_qty": 2,
         "skin_bar_name": "DB12",
         "skin_layers": 2,
@@ -888,7 +889,7 @@ def calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As, As_prime):
     }
 
 
-def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n_legs, bar_dia, lambda_c):
+def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n_legs, bar_dia, lambda_c, stirrup_spacing=None):
     if d <= 0:
         return {
             "final_s": 0,
@@ -907,6 +908,7 @@ def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n
             "Aoh": 0,
             "Ao": 0,
             "ph": 0,
+            "spacing_ok": False,
         }
 
     phi_v = 0.75
@@ -948,7 +950,8 @@ def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n
     s_max_shear = min(d / 4, 300) if Vs_req > (0.33 * math.sqrt(fc) * b * d) else min(d / 2, 600)
     s_max = min(s_max_shear, ph / 8, 300) if needs_torsion else s_max_shear
     s_exact = min(s_req, s_max)
-    final_s = math.floor(s_exact / 25) * 25
+    auto_s = math.floor(s_exact / 25) * 25
+    final_s = float(stirrup_spacing) if stirrup_spacing else auto_s
 
     Vs_prov = (n_legs * A_leg * fyt * d / final_s) if final_s > 0 else 0
     phi_Vn = phi_v * (Vc + Vs_prov)
@@ -957,9 +960,10 @@ def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n
     combined_stress = math.sqrt(v_stress**2 + t_stress**2)
     stress_limit = phi_v * ((Vc / (b * d)) + 0.66 * math.sqrt(fc))
     section_fails = combined_stress > stress_limit
+    spacing_ok = 50 <= final_s <= s_max
 
     return {
-        "final_s": 0 if final_s < 50 or section_fails else final_s,
+        "final_s": round(final_s, 1),
         "section_fails": section_fails,
         "needs_torsion": needs_torsion,
         "Al_req": round(Al_req, 1),
@@ -975,6 +979,7 @@ def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n
         "Aoh": Aoh,
         "Ao": Ao,
         "ph": ph,
+        "spacing_ok": spacing_ok,
     }
 
 
@@ -1555,6 +1560,7 @@ with col_prop:
     n_legs = st.number_input("Stirrup legs", min_value=2, step=1, key="n_legs")
     cover_clear = st.number_input("Clear cover to stirrup (mm)", step=5, min_value=20, key="cover_clear")
     clear_space = st.number_input("Minimum clear bar spacing (mm)", step=5, min_value=20, key="clear_space")
+    stirrup_spacing = st.number_input("Stirrup spacing s (mm)", step=25, min_value=25, key="stirrup_spacing")
     st.subheader("Skin Bars")
     skin_c1, skin_c2, skin_c3 = st.columns(3)
     skin_bar_qty = skin_c1.number_input(
@@ -1688,7 +1694,7 @@ if st.session_state.get("design_results_visible", False):
             v_combo = force_meta[zone]["V"]
             t_combo = force_meta[zone]["T"]
             res_flex = calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As_tens, As_comp)
-            res_shear = calculate_shear_torsion(b, h, d, fc, fyt, fy, cover_clear, Vu_design, Tu_design, n_legs, bar_v, lambda_c)
+            res_shear = calculate_shear_torsion(b, h, d, fc, fyt, fy, cover_clear, Vu_design, Tu_design, n_legs, bar_v, lambda_c, stirrup_spacing)
             skin = calculate_skin_reinforcement(h, d, skin_bar_dia, skin_bar_qty, skin_layers)
 
             top_bar_dia = bar_selections[zone]["top_d1"]
@@ -1706,7 +1712,7 @@ if st.session_state.get("design_results_visible", False):
                 and res_flex["passes_As_max_tc"]
                 and res_flex["phi_Mn"] >= Mu
             )
-            shear_ok = res_shear["phi_Vn"] >= Vu_design and res_shear["final_s"] > 0
+            shear_ok = res_shear["phi_Vn"] >= Vu_design and res_shear["spacing_ok"] and not res_shear["section_fails"]
 
             if flex_ok and shear_ok:
                 status_card("pass", f"{zone} passes flexure and shear/torsion preliminary checks.", extra_class="three-zone-scale")
@@ -1721,7 +1727,7 @@ if st.session_state.get("design_results_visible", False):
             with m2:
                 mini_metric("phi Vn", f"{res_shear['phi_Vn']} kN", f"{v_combo} | D/C {dc_shear}", extra_class="three-zone-scale")
             with m3:
-                mini_metric("Stirrups", f"{n_legs}-{bar_v_name}", f"@ {res_shear['final_s']} mm" if res_shear["final_s"] else "FAIL", extra_class="three-zone-scale")
+                mini_metric("Stirrups", f"{n_legs}-{bar_v_name}", f"@ {res_shear['final_s']} mm | D/C {dc_shear}", extra_class="three-zone-scale")
             with m4:
                 mini_metric("Strain", f"{res_flex['eps_t']}", res_flex["strain_class"], extra_class="three-zone-scale")
 
@@ -1737,7 +1743,7 @@ if st.session_state.get("design_results_visible", False):
             check_row("Tension-controlled", res_flex["is_ductile"], f"eps_t = {res_flex['eps_t']}; phi = {res_flex['phi']}", warn=not res_flex["is_ductile"] and res_flex["phi_Mn"] >= Mu, extra_class="three-zone-scale")
             check_row("Max As tension-controlled", res_flex["passes_As_max_tc"], f"As = {As_tens:.1f}; As,max,tc = {res_flex['As_max_tc']} mm2", extra_class="three-zone-scale")
             check_row("Shear phiVn >= Vu", res_shear["phi_Vn"] >= Vu_design, f"{v_combo}; {res_shear['phi_Vn']} >= {Vu_design:.1f} kN", extra_class="three-zone-scale")
-            check_row("Transverse spacing", res_shear["final_s"] > 0, f"s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm", extra_class="three-zone-scale")
+            check_row("Transverse spacing", res_shear["spacing_ok"], f"s use = {res_shear['final_s']} mm; s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm", extra_class="three-zone-scale")
             check_row("Torsion threshold", not res_shear["needs_torsion"], f"{t_combo}; Tu = {Tu_design:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"], extra_class="three-zone-scale")
 
             if not skin["required"]:
@@ -1797,7 +1803,8 @@ if st.session_state.get("design_results_visible", False):
                     hide_index=True,
                 )
 
-            stirrup_text = f"{n_legs}-DB{bar_v} @ {res_shear['final_s']} mm (D/C: {dc_shear})" if res_shear["final_s"] > 0 else "FAILS"
+            stirrup_status = "OK" if shear_ok else "FAIL"
+            stirrup_text = f"{n_legs}-DB{bar_v} @ {res_shear['final_s']} mm ({stirrup_status}, D/C: {dc_shear})"
             pdf_zone_data[zone] = {
                 "Mu": round(Mu, 1),
                 "M_combo": m_combo,
