@@ -1654,10 +1654,10 @@ if st.session_state.get("design_results_visible", False):
     font-size: calc(5.5px * {RESULTS_FONT_SCALE} * 1.25);
 }}
 .three-zone-scale.mini-metric-value {{
-    font-size: calc(12px * {RESULTS_FONT_SCALE} * 1.25);
+    font-size: calc(12px * {RESULTS_FONT_SCALE} * 1.0);
 }}
 .three-zone-scale.mini-metric-delta {{
-    font-size: calc(5.5px * {RESULTS_FONT_SCALE} * 1.25);
+    font-size: calc(5.5px * {RESULTS_FONT_SCALE} * 1.0);
 }}
 .three-zone-scale.check-row {{
     font-size: calc(14px * {RESULTS_FONT_SCALE});
