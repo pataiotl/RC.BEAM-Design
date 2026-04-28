@@ -1008,14 +1008,28 @@ def status_card(kind, text, extra_class=""):
     st.markdown(f"<div class='status-card status-{kind}{cls}'>{esc(text)}</div>", unsafe_allow_html=True)
 
 
-def mini_metric(label, value, delta, extra_class=""):
+def mini_metric(label, value, delta, status="pass", extra_class=""):
     cls = f" {extra_class.strip()}" if extra_class else ""
+    
+    if status == "fail":
+        bg = "#2a0a0a"
+        txt = "var(--fail)"
+        border = "#991b1b"
+    elif status == "warn":
+        bg = "#2a1f00"
+        txt = "var(--warn)"
+        border = "#92400e"
+    else:
+        bg = "#052a14"
+        txt = "var(--pass)"
+        border = "#166534"
+        
     st.markdown(
         f"""
 <div class="mini-metric{cls}">
   <div class="mini-metric-label{cls}">{esc(label)}</div>
   <div class="mini-metric-value{cls}">{esc(value)}</div>
-  <div class="mini-metric-delta{cls}">{esc(delta)}</div>
+  <div class="mini-metric-delta{cls}" style="color: {txt}; background: {bg}; border: 1px solid {border};">{esc(delta)}</div>
 </div>
         """,
         unsafe_allow_html=True,
@@ -1721,15 +1735,26 @@ if st.session_state.get("design_results_visible", False):
             else:
                 status_card("fail", f"{zone} fails one or more required checks.", extra_class="three-zone-scale")
 
+            flex_ui = "pass" if res_flex["phi_Mn"] >= Mu else "fail"
+            shear_ui = "pass" if res_shear["phi_Vn"] >= Vu_design else "fail"
+            stirrup_ui = "pass" if shear_ok else "fail"
+            
+            if not shear_ok:
+                stirrup_label = f"FAIL | @ {res_shear['final_s']} mm"
+            else:
+                stirrup_label = f"@ {res_shear['final_s']} mm | D/C {dc_shear}"
+
+            strain_ui = "pass" if res_flex["strain_class"] == "Tension-controlled" else ("warn" if res_flex["strain_class"] == "Transition zone" else "fail")
+
             m1, m2, m3, m4 = st.columns(4)
             with m1:
-                mini_metric("phi Mn", f"{res_flex['phi_Mn']} kNm", f"{m_combo} | D/C {dc_flex}", extra_class="three-zone-scale")
+                mini_metric("phi Mn", f"{res_flex['phi_Mn']} kNm", f"{m_combo} | D/C {dc_flex}", status=flex_ui, extra_class="three-zone-scale")
             with m2:
-                mini_metric("phi Vn", f"{res_shear['phi_Vn']} kN", f"{v_combo} | D/C {dc_shear}", extra_class="three-zone-scale")
+                mini_metric("phi Vn", f"{res_shear['phi_Vn']} kN", f"{v_combo} | D/C {dc_shear}", status=shear_ui, extra_class="three-zone-scale")
             with m3:
-                mini_metric("Stirrups", f"{n_legs}-{bar_v_name}", f"@ {res_shear['final_s']} mm | D/C {dc_shear}", extra_class="three-zone-scale")
+                mini_metric("Stirrups", f"{n_legs}-{bar_v_name}", stirrup_label, status=stirrup_ui, extra_class="three-zone-scale")
             with m4:
-                mini_metric("Strain", f"{res_flex['eps_t']}", res_flex["strain_class"], extra_class="three-zone-scale")
+                mini_metric("Strain", f"{res_flex['eps_t']}", res_flex["strain_class"], status=strain_ui, extra_class="three-zone-scale")
 
             fig = draw_beam_section(b, h, cover_clear, bar_v, top_rg, bot_rg, res_flex, zone, skin, skin_bar_dia, compression_face)
             img_pad_l, img_mid, img_pad_r = st.columns([0.22, 0.56, 0.22])
