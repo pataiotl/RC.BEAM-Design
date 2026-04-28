@@ -945,7 +945,7 @@ def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n
     req_per_outer_leg = (Av_s_req / max(n_legs, 1)) + At_s_req
     s_calc = A_leg / req_per_outer_leg if req_per_outer_leg > 0 else 9999
     min_combined_ratio = max(0.062 * math.sqrt(fc) * b / fyt, 0.35 * b / fyt)
-    s_min_steel = A_leg / (min_combined_ratio / 2)
+    s_min_steel = (n_legs * A_leg) / min_combined_ratio
     s_req = min(s_calc, s_min_steel)
     s_max_shear = min(d / 4, 300) if Vs_req > (0.33 * math.sqrt(fc) * b * d) else min(d / 2, 600)
     s_max = min(s_max_shear, ph / 8, 300) if needs_torsion else s_max_shear
