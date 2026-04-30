@@ -1752,7 +1752,7 @@ if st.session_state.get("design_results_visible", False):
             shear_ui = "pass" if dc_pure_shear_rounded <= 1.0 else "fail"
             
             # 2. Stirrup UI (Cares about combined worst-case dc_shear)
-            stirrup_ui = "pass" if shear_ok else "fail"
+            stirrup_ui = "pass" if dc_shear <= 1.0 else "fail"
             
             # Display Stirrup details
             stirrup_value = f"{n_legs}-{bar_v_name}"
