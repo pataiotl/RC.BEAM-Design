@@ -892,24 +892,25 @@ def calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As, As_prime):
 def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n_legs, bar_dia, lambda_c, stirrup_spacing=None):
     if d <= 0:
         return {
-            "final_s": 0,
-            "section_fails": True,
-            "needs_torsion": False,
-            "Al_req": 0,
-            "Al_min": 0,
-            "T_th": 0,
-            "phi_Vc": 0,
-            "phi_Vn": 0,
-            "lambda_s": 0,
-            "s_exact": 0,
-            "s_max": 0,
-            "combined_stress": 0,
-            "stress_limit": 0,
-            "Aoh": 0,
-            "Ao": 0,
-            "ph": 0,
-            "spacing_ok": False,
-        }
+        "final_s": round(final_s, 1),
+        "section_fails": section_fails,
+        "needs_torsion": needs_torsion,
+        "Al_req": round(Al_req, 1),
+        "Al_min": round(Al_min, 1),
+        "T_th": round(T_th / 1_000_000, 1),
+        "phi_Vc": round(phi_Vc / 1000, 1),
+        "phi_Vn": round(phi_Vn / 1000, 1),
+        "lambda_s": round(lambda_s, 3),
+        "s_calc": round(s_calc, 1),    # <-- ADD THIS LINE
+        "s_exact": round(s_exact, 1),
+        "s_max": round(s_max, 1),
+        "combined_stress": round(combined_stress, 2),
+        "stress_limit": round(stress_limit, 2),
+        "Aoh": Aoh,
+        "Ao": Ao,
+        "ph": ph,
+        "spacing_ok": spacing_ok,
+    }
 
     phi_v = 0.75
     Vu = abs(Vu_kN) * 1000
@@ -1718,15 +1719,19 @@ if st.session_state.get("design_results_visible", False):
 
             dc_flex = round(Mu / res_flex["phi_Mn"], 2) if res_flex["phi_Mn"] > 0 else 999.9
             
-            # --- TRUE WORST-CASE STIRRUP D/C CALCULATION ---
-            # 1. Pure Shear D/C
+            # --- COMBINED SHEAR & TORSION FORCE D/C ---
+            # 1. Base Concrete/Shear Demand
             dc_pure_shear = Vu_design / res_shear["phi_Vn"] if res_shear.get("phi_Vn", 0) > 0 else 999.9
             
-            # 2. Combined Steel & Spacing D/C (Provided Spacing / Required Spacing)
+            # 2. Combined Steel Force Demand (Shear + Torsion)
+            # s_calc is the spacing required purely by Vu and Tu, ignoring ACI geometric limits
+            dc_steel_force = res_shear["final_s"] / res_shear["s_calc"] if res_shear.get("s_calc", 9999) > 0 else 0
+            
+            # 3. Spacing Check (For warnings only: s_exact includes max spacing and min steel)
             dc_spacing = res_shear["final_s"] / res_shear["s_exact"] if res_shear.get("s_exact", 0) > 0 else 999.9
             
-            # The UI will display the governing D/C ratio for STIRRUPS ONLY
-            dc_shear = round(max(dc_pure_shear, dc_spacing), 2)
+            # The UI will now display the True Force D/C for both Shear and Torsion combined
+            dc_shear = round(max(dc_pure_shear, dc_steel_force), 2)
 
             flex_ok = (
                 res_flex["converged"]
