@@ -1722,14 +1722,11 @@ if st.session_state.get("design_results_visible", False):
             # 1. Pure Shear D/C
             dc_pure_shear = Vu_design / res_shear["phi_Vn"] if res_shear.get("phi_Vn", 0) > 0 else 999.9
             
-            # 2. Web Crushing D/C (Combined shear and torsion stress limit)
-            dc_web_crushing = res_shear["combined_stress"] / res_shear["stress_limit"] if res_shear.get("stress_limit", 0) > 0 else 999.9
-            
-            # 3. Combined Steel & Spacing D/C (Provided Spacing / Required Spacing)
+            # 2. Combined Steel & Spacing D/C (Provided Spacing / Required Spacing)
             dc_spacing = res_shear["final_s"] / res_shear["s_exact"] if res_shear.get("s_exact", 0) > 0 else 999.9
             
-            # The UI will display the governing (maximum) D/C ratio
-            dc_shear = round(max(dc_pure_shear, dc_web_crushing, dc_spacing), 2)
+            # The UI will display the governing D/C ratio for STIRRUPS ONLY
+            dc_shear = round(max(dc_pure_shear, dc_spacing), 2)
 
             flex_ok = (
                 res_flex["converged"]
@@ -1757,13 +1754,9 @@ if st.session_state.get("design_results_visible", False):
             # 2. Stirrup UI (Cares about combined worst-case dc_shear)
             stirrup_ui = "pass" if shear_ok else "fail"
             
-            # Explicit Web Crushing / Overstress Check
-            if res_shear.get("section_fails", False):
-                stirrup_value = "OVERSTRESSED"
-                stirrup_label = f"REVISE SECTION | D/C {dc_shear}"
-            else:
-                stirrup_value = f"{n_legs}-{bar_v_name}"
-                stirrup_label = f"@ {res_shear['final_s']} mm | D/C {dc_shear}"
+            # Display Stirrup details
+            stirrup_value = f"{n_legs}-{bar_v_name}"
+            stirrup_label = f"@ {res_shear['final_s']} mm | D/C {dc_shear}"
 
             strain_ui = "pass" if res_flex["strain_class"] == "Tension-controlled" else ("warn" if res_flex["strain_class"] == "Transition zone" else "fail")
 
@@ -1790,6 +1783,10 @@ if st.session_state.get("design_results_visible", False):
             check_row("Tension-controlled", res_flex["is_ductile"], f"eps_t = {res_flex['eps_t']}; phi = {res_flex['phi']}", warn=not res_flex["is_ductile"] and res_flex["phi_Mn"] >= Mu, extra_class="three-zone-scale")
             check_row("Max As tension-controlled", res_flex["passes_As_max_tc"], f"As = {As_tens:.1f}; As,max,tc = {res_flex['As_max_tc']} mm2", extra_class="three-zone-scale")
             check_row("Shear phiVn >= Vu", res_shear["phi_Vn"] >= Vu_design, f"{v_combo}; {res_shear['phi_Vn']} >= {Vu_design:.1f} kN", extra_class="three-zone-scale")
+            
+            # The Web Crushing check is now explicitly separated here
+            check_row("Max Shear/Torsion Web Crushing", not res_shear["section_fails"], f"Stress = {res_shear['combined_stress']:.2f} MPa <= Limit = {res_shear['stress_limit']:.2f} MPa", extra_class="three-zone-scale")
+            
             check_row("Transverse spacing", res_shear["spacing_ok"], f"s use = {res_shear['final_s']} mm; s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm", extra_class="three-zone-scale")
             check_row("Torsion threshold", not res_shear["needs_torsion"], f"{t_combo}; Tu = {Tu_design:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"], extra_class="three-zone-scale")
 
